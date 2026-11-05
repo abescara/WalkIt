@@ -28,7 +28,7 @@ class MainActivity : Activity() {
         MapLibre.getInstance(this)
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24,24,24,24) }
         setContentView(ScrollView(this).apply { addView(root) })
-        showAuth()
+        runDb({ db.ensureGuestUser() }) { id -> userId=id; showHome() }
     }
 
     private fun label(text: String) = TextView(this).apply { this.text=text; textSize=18f; setPadding(0,12,0,8) }
@@ -46,33 +46,17 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showAuth() {
-        clear("WalkIt prototype")
-        root.addView(label("Local accounts on this device only. Use demonstration credentials."))
-        val username=field("Username"); val password=field("Password",true)
-        root.addView(username); root.addView(password)
-        root.addView(button("Sign in") {
-            runDb({ db.login(username.text.toString(),password.text.toString()) }) { id ->
-                if (id==null) error("Invalid username or password") else { userId=id; showHome() }
-            }
-        })
-        root.addView(button("Create account") {
-            runDb({ db.register(username.text.toString(),password.text.toString()) }) { id -> userId=id; showHome() }
-        })
-    }
-
     private fun showHome() {
-        if (userId==null) { showAuth(); return }
+        if (userId==null) { error("Could not open the local WalkIt profile."); return }
         clear("WalkIt")
         root.addView(label("Recorded conditions are unverified. Check your surroundings before walking."))
         root.addView(button("Hazard reports") { showReports() })
         root.addView(button("Compare routes") { showRoutes() })
         root.addView(button("Open map") { showMap() })
-        root.addView(button("Sign out") { userId=null; showAuth() })
     }
 
     private fun showReports() {
-        val owner=userId ?: return showAuth()
+        val owner=userId ?: return showHome()
         runDb({ db.reports() }) { reports ->
             clear("Hazard reports")
             root.addView(button("Back") { showHome() })
@@ -95,7 +79,7 @@ class MainActivity : Activity() {
     }
 
     private fun showAddReport() {
-        val owner=userId ?: return showAuth()
+        val owner=userId ?: return showHome()
         runDb({ db.segments() }) { segments ->
             clear("Add hazard report")
             root.addView(button("Back") { showReports() })
@@ -122,7 +106,7 @@ class MainActivity : Activity() {
     }
 
     private fun showRoutes() {
-        if (userId==null) return showAuth()
+        if (userId==null) return showHome()
         runDb({ db.routes() }) { routes ->
             clear("Compare routes")
             root.addView(button("Back") { showHome() })
@@ -134,7 +118,7 @@ class MainActivity : Activity() {
     }
 
     private fun showMap() {
-        if (userId==null) return showAuth()
+        if (userId==null) return showHome()
         clear("WalkIt map")
         root.addView(button("Back") { disposeMap(); showHome() })
         root.addView(label("Illustrative sample routes and hazard pins around Manila. These are not real reports or your current location."))
@@ -146,7 +130,7 @@ class MainActivity : Activity() {
         map.onStart()
         map.onResume()
         map.getMapAsync { maplibreMap ->
-            maplibreMap.setStyle("https://demotiles.maplibre.org/style.json") {
+            maplibreMap.setStyle("https://styles.maptoolkit.org/street.json") {
                 maplibreMap.cameraPosition=CameraPosition.Builder().target(LatLng(14.5995,120.9842)).zoom(14.0).build()
                 maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.5996,120.9840),LatLng(14.5987,120.9852)).color(Color.rgb(37,99,235)).width(6f))
                 maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.6008,120.9842),LatLng(14.5987,120.9852)).color(Color.rgb(22,163,74)).width(6f))

@@ -46,6 +46,18 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
         finally { spec.clearPassword() }
     }
 
+    fun ensureGuestUser(): Long {
+        readableDatabase.rawQuery("SELECT id FROM users WHERE username='guest'", null).use { c ->
+            if (c.moveToFirst()) return c.getLong(0)
+        }
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val values = ContentValues().apply {
+            put("username", "guest"); put("display_name", "Guest")
+            put("salt", salt); put("password_hash", hash(java.util.UUID.randomUUID().toString(), salt))
+        }
+        return writableDatabase.insertOrThrow("users", null, values)
+    }
+
     fun register(username: String, password: String): Long {
         val normalized = username.trim().lowercase()
         require(normalized.matches(Regex("[a-z0-9_]{3,24}"))) { "Username needs 3–24 letters, digits, or underscores." }
