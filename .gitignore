@@ -1,0 +1,23 @@
+# Android / Android Studio
+.gradle/
+/local.properties
+/.idea/
+*.iml
+/build/
+**/build/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Credentials and local data
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
