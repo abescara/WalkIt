@@ -4,7 +4,7 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 
 ## Status
 
-**Buildable MVP draft.** The prototype opens directly without a login screen and uses a local guest profile. It implements hazard creation/listing/resolution/deletion, a comparison of two sample routes, and an interactive street map with illustrative route lines and hazard pins. The supplied proposal says the full scope and demonstration area still require instructor review. The remaining features are tracked in the implementation plan.
+**Buildable MVP draft.** The prototype opens directly to a full-screen street map with Map, Forums, and Profile tabs. Forums and Profile are empty placeholders. A floating camera button captures one or more photos or selects a batch, then saves a description, time, and map-center coordinates with circular photo markers. The prototype also has local hazard reports and two illustrative routes. Submitted photos and reports are stored on the device; there is no cloud upload service yet.
 
 ## Planned prototype
 
@@ -22,7 +22,7 @@ See [the project proposal](docs/WalkIt_Project_Proposal.pdf) for detailed requir
 
 1. Open this repository in Android Studio with JDK 17 and Android SDK 36 installed.
 2. Build and run the `app` configuration on an Android 8.0 (API 26) or newer device or emulator. Or run `./gradlew assembleDebug` (`.\gradlew.bat assembleDebug` on Windows).
-3. Open Hazard reports and add a sample report. Visit Compare routes or Open map to see it reflected in route counts. Reports are saved locally under a guest profile.
+3. Tap the camera button, take or select photos, enter a description/time/location, then submit to place photo markers on the map. The map opens to illustrative Manila sample geometry; choose the actual project area before presenting it as project data.
 
 The draft uses four clearly fictional pathway names, two sample routes, and illustrative map geometry in central Manila. Replace them only after the team agrees on the demonstration area. Street map tiles require internet access; hazard reports remain on-device. See [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
 

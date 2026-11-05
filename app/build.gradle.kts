@@ -16,5 +16,6 @@ android {
     }
     dependencies {
         implementation("org.maplibre.gl:android-sdk:13.6.1")
+        implementation("androidx.core:core:1.15.0")
     }
 }

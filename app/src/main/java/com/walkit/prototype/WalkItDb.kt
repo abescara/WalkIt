@@ -12,8 +12,9 @@ data class Hazard(val id: Long, val ownerId: Long, val owner: String, val segmen
                   val segment: String, val title: String, val category: String,
                   val severity: Int, val details: String, val status: String)
 data class Route(val name: String, val meters: Int, val hazards: Int, val barriers: Int)
+data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>)
 
-class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 1) {
+class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 2) {
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -28,6 +29,7 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
         db.execSQL("CREATE TABLE user_badges (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, badge_id INTEGER NOT NULL REFERENCES badges(id), PRIMARY KEY(user_id,badge_id))")
         db.execSQL("CREATE TABLE saved_routes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, route_id INTEGER NOT NULL REFERENCES walking_routes(id), PRIMARY KEY(user_id,route_id))")
         db.execSQL("CREATE TABLE user_preferences (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, route_preference TEXT NOT NULL)")
+        createPhotoTables(db)
         listOf("North Walk", "Library Path", "Garden Lane", "South Walk").forEach { name ->
             db.execSQL("INSERT INTO pathway_segments(name) VALUES (?)", arrayOf(name))
         }
@@ -36,8 +38,43 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // No migration is needed for schema version 1. Future changes must preserve records.
-        error("A database migration is required before opening version $newVersion")
+        if (oldVersion < 2) createPhotoTables(db)
+    }
+
+    private fun createPhotoTables(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS photo_reports (id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, description TEXT NOT NULL, captured_time TEXT NOT NULL, location TEXT NOT NULL, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS photo_items (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, local_path TEXT NOT NULL)")
+    }
+
+    fun savePhotoReport(ownerId: Long, description: String, time: String, location: String, photoPaths: List<String>): Long {
+        require(description.trim().isNotEmpty()) { "Add a description for the photo." }
+        require(photoPaths.isNotEmpty()) { "Add at least one photo." }
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            val values=ContentValues().apply {
+                put("owner_id",ownerId); put("description",description.trim()); put("captured_time",time.trim())
+                put("location",location.trim()); put("created_at",System.currentTimeMillis())
+            }
+            val id=db.insertOrThrow("photo_reports",null,values)
+            photoPaths.forEach { path -> db.insertOrThrow("photo_items",null,ContentValues().apply { put("report_id",id); put("local_path",path) }) }
+            db.setTransactionSuccessful()
+            return id
+        } finally { db.endTransaction() }
+    }
+
+    fun photoReports(): List<PhotoReport> = buildList {
+        readableDatabase.rawQuery("SELECT id,description,captured_time,location FROM photo_reports ORDER BY id DESC",null).use { c ->
+            while (c.moveToNext()) {
+                val id=c.getLong(0)
+                val photos=buildList {
+                    readableDatabase.rawQuery("SELECT local_path FROM photo_items WHERE report_id=? ORDER BY id",arrayOf(id.toString())).use { p ->
+                        while (p.moveToNext()) add(p.getString(0))
+                    }
+                }
+                add(PhotoReport(id,c.getString(1),c.getString(2),c.getString(3),photos))
+            }
+        }
     }
 
     private fun hash(password: String, salt: ByteArray): ByteArray {
