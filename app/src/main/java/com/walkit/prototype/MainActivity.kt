@@ -9,6 +9,11 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.os.Bundle
+import android.os.Build
+import android.os.Looper
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.content.pm.PackageManager
 import android.view.Gravity
 import android.view.View
@@ -25,6 +30,7 @@ import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.annotations.PolylineOptions
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapView
@@ -60,6 +66,11 @@ class MainActivity : ComponentActivity() {
     }
     private var cameraController: LifecycleCameraController? = null
     private var cameraModeBatch = false
+    private var captureInProgress = false
+    private var locationManager: LocationManager? = null
+    private var pendingLocationListener: LocationListener? = null
+    private var lastUserLocation: LatLng? = null
+    private var userLocationMarker: org.maplibre.android.annotations.Marker? = null
     private var mapTarget = LatLng(12.8797,121.7740)
     private var mapZoom = 5.5
 
@@ -131,6 +142,15 @@ class MainActivity : ComponentActivity() {
         val cameraParams=FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(86) }
         screen.addView(camera,cameraParams)
 
+        val locate=TextView(this).apply {
+            text="◎"; textSize=30f; gravity=Gravity.CENTER; contentDescription="Show my location"
+            setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
+            elevation=8f; setOnClickListener { showMyLocation() }
+        }
+        screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
+            rightMargin=dp(20); bottomMargin=dp(88)
+        })
+
         addBottomNavigation()
         map.onCreate(null)
         map.onStart()
@@ -141,6 +161,7 @@ class MainActivity : ComponentActivity() {
                 currentStyleReady=true
                 maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
                 maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
+                lastUserLocation?.let { addUserLocationMarker(it) }
                 maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.5996,120.9840),LatLng(14.5987,120.9852)).color(Color.rgb(37,99,235)).width(6f))
                 maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.6008,120.9842),LatLng(14.5987,120.9852)).color(Color.rgb(22,163,74)).width(6f))
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
@@ -180,17 +201,24 @@ class MainActivity : ComponentActivity() {
             if(grantResults.firstOrNull()==PackageManager.PERMISSION_GRANTED) {
                 capturedPhotos.clear(); cameraModeBatch=false; showCameraScreen()
             } else toast("Camera access is needed to take a photo.")
+        } else if(requestCode==REQUEST_LOCATION_PERMISSION) {
+            if(grantResults.any { it==PackageManager.PERMISSION_GRANTED }) showMyLocation()
+            else toast("Allow location access to show your position on the map.")
         }
     }
 
     private fun showCameraScreen() {
+        captureInProgress=false
         currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
         disposeMap(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
         window.statusBarColor=Color.BLACK; window.navigationBarColor=Color.BLACK
         window.decorView.systemUiVisibility=0
         val preview=PreviewView(this).apply { scaleType=PreviewView.ScaleType.FILL_CENTER }
         screen.addView(preview,FrameLayout.LayoutParams(-1,-1))
-        val controller=LifecycleCameraController(this).apply { bindToLifecycle(this@MainActivity) }
+        val controller=LifecycleCameraController(this).apply {
+            imageCaptureMode=ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+            bindToLifecycle(this@MainActivity)
+        }
         preview.controller=controller; cameraController=controller
 
         val close=TextView(this).apply {
@@ -222,7 +250,7 @@ class MainActivity : ComponentActivity() {
         val shutter=FrameLayout(this).apply { background=rounded(Color.WHITE,60); elevation=10f; contentDescription="Take photo"; isClickable=true }
         val inner=View(this).apply { background=rounded(Color.rgb(37,99,235),60) }
         shutter.addView(inner,FrameLayout.LayoutParams(dp(62),dp(62),Gravity.CENTER))
-        shutter.setOnClickListener { capturePhoto(done) }
+        shutter.setOnClickListener { if(!captureInProgress) capturePhoto(done,shutter) }
         screen.addView(shutter,FrameLayout.LayoutParams(dp(82),dp(82),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(32) })
         updateCameraMode(single,batch,done)
     }
@@ -236,20 +264,111 @@ class MainActivity : ComponentActivity() {
         done.text="Done ${capturedPhotos.size}"
     }
 
-    private fun capturePhoto(done: TextView) {
+    private fun capturePhoto(done: TextView,shutter: View) {
         val controller=cameraController ?: return
+        captureInProgress=true
+        shutter.isEnabled=false
+        shutter.alpha=0.55f
         val file=File(photoDir,"walkit_${System.currentTimeMillis()}.jpg")
         val output=ImageCapture.OutputFileOptions.Builder(file).build()
         controller.takePicture(output,ContextCompat.getMainExecutor(this),object: ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                captureInProgress=false
+                shutter.isEnabled=true
+                shutter.alpha=1f
+                if(!file.exists() || file.length()==0L) {
+                    file.delete(); toast("The camera returned an empty photo. Please try again."); return
+                }
                 capturedPhotos.add(file.absolutePath)
                 if(cameraModeBatch) {
                     done.text="Done ${capturedPhotos.size}"; done.visibility=View.VISIBLE
                     toast("Photo ${capturedPhotos.size} added")
                 } else finishCamera(true)
             }
-            override fun onError(exception: ImageCaptureException) { toast("Could not capture photo. Try again.") }
+            override fun onError(exception: ImageCaptureException) {
+                captureInProgress=false
+                shutter.isEnabled=true
+                shutter.alpha=1f
+                file.delete()
+                toast("Could not capture photo: ${exception.message ?: "please try again"}")
+            }
         })
+    }
+
+    private fun showMyLocation() {
+        val fine=ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED
+        val coarse=ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED
+        if(!fine && !coarse) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.ACCESS_FINE_LOCATION),REQUEST_LOCATION_PERMISSION)
+            return
+        }
+        val manager=getSystemService(LOCATION_SERVICE) as LocationManager
+        locationManager=manager
+        val provider=when {
+            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            else -> null
+        }
+        if(provider==null) { toast("Turn on Location in your device settings, then try again."); return }
+        if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.R) {
+            try {
+                manager.getCurrentLocation(provider,null,mainExecutor) { location ->
+                    if(location==null) toast("Could not get your location. Check that Location is turned on.")
+                    else displayUserLocation(location)
+                }
+            } catch (_: SecurityException) { toast("Allow location access to show your position.") }
+        } else {
+            var gotLocation=false
+            try {
+                val cached=manager.getLastKnownLocation(provider)
+                if(cached!=null) { displayUserLocation(cached); gotLocation=true }
+                val listener=object: LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        manager.removeUpdates(this)
+                        pendingLocationListener=null
+                        displayUserLocation(location)
+                    }
+                }
+                pendingLocationListener=listener
+                manager.requestLocationUpdates(provider,0L,0f,listener,Looper.getMainLooper())
+                screen.postDelayed({
+                    pendingLocationListener?.let { manager.removeUpdates(it); pendingLocationListener=null }
+                    if(!gotLocation) toast("Could not get your location. Check that Location is turned on.")
+                },12_000L)
+            } catch (_: SecurityException) { toast("Allow location access to show your position.") }
+        }
+    }
+
+    private fun displayUserLocation(location: Location) {
+        if(location.latitude !in 4.0..21.8 || location.longitude !in 116.0..127.0) {
+            toast("Your current location is outside the Philippines map.")
+            return
+        }
+        val point=LatLng(location.latitude,location.longitude)
+        lastUserLocation=point
+        mapTarget=point
+        mapZoom=16.0
+        addUserLocationMarker(point)
+        currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+    }
+
+    private fun addUserLocationMarker(point: LatLng) {
+        val map=currentMap ?: return
+        if(!currentStyleReady) return
+        userLocationMarker?.let { map.removeMarker(it) }
+        val size=dp(24)
+        val bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888)
+        val canvas=Canvas(bitmap)
+        val paint=Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.color=0x443B82F6
+        canvas.drawCircle(size/2f,size/2f,size/2f,paint)
+        paint.color=Color.WHITE
+        canvas.drawCircle(size/2f,size/2f,dp(8).toFloat(),paint)
+        paint.color=Color.rgb(37,99,235)
+        canvas.drawCircle(size/2f,size/2f,dp(6).toFloat(),paint)
+        val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
+        userLocationMarker=map.addMarker(MarkerOptions().position(point).title("You are here").icon(icon))
+        bitmap.recycle()
     }
 
     private fun finishCamera(keepPhotos: Boolean) {
@@ -404,7 +523,11 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { mapView?.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView?.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView?.onSaveInstanceState(outState) }
-    override fun onDestroy() { disposeMap(); worker.shutdown(); db.close(); super.onDestroy() }
+    override fun onDestroy() {
+        pendingLocationListener?.let { locationManager?.removeUpdates(it) }
+        pendingLocationListener=null
+        disposeMap(); worker.shutdown(); db.close(); super.onDestroy()
+    }
 
-    companion object { private const val REQUEST_CAMERA_PERMISSION=22 }
+    companion object { private const val REQUEST_CAMERA_PERMISSION=22; private const val REQUEST_LOCATION_PERMISSION=23 }
 }
