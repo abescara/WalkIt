@@ -1,0 +1,24 @@
+name: Feature
+description: Propose a WalkIt feature or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User need
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable outcomes.
+    validations:
+      required: true
+  - type: input
+    id: design
+    attributes:
+      label: Figma frame link
+      description: Add a frame link when the feature changes the interface.

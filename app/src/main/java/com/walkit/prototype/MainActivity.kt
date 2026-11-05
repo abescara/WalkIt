@@ -1,28 +1,32 @@
 package com.walkit.prototype
 
-import android.app.Activity
-import android.app.AlertDialog
-import android.content.Intent
+import android.app.Dialog
+import android.Manifest
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
-import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
+import android.content.pm.PackageManager
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.widget.*
-import androidx.core.content.FileProvider
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.view.LifecycleCameraController
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.annotations.PolylineOptions
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapView
 import java.io.File
 import java.text.SimpleDateFormat
@@ -30,7 +34,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var db: WalkItDb
     private lateinit var screen: FrameLayout
@@ -40,8 +44,24 @@ class MainActivity : Activity() {
     private var currentStyleReady = false
     private var selectedTab = Tab.MAP
     private val capturedPhotos = mutableListOf<String>()
-    private var pendingCameraPath: String? = null
     private val photoDir by lazy { File(filesDir, "walkit-photos").apply { mkdirs() } }
+    private var photoDialog: Dialog? = null
+    private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if(uris.isNotEmpty()) worker.execute {
+            val imported=uris.mapNotNull { uri ->
+                try {
+                    val file=File(photoDir,"walkit_${System.currentTimeMillis()}_${(0..9999).random()}.jpg")
+                    contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use(input::copyTo) }
+                    file.absolutePath.takeIf { file.exists() && file.length()>0 }
+                } catch (_: Exception) { null }
+            }
+            runOnUiThread { capturedPhotos.addAll(imported); showPhotoForm() }
+        }
+    }
+    private var cameraController: LifecycleCameraController? = null
+    private var cameraModeBatch = false
+    private var mapTarget = LatLng(12.8797,121.7740)
+    private var mapZoom = 5.5
 
     private enum class Tab { MAP, FORUMS, PROFILE }
 
@@ -68,7 +88,10 @@ class MainActivity : Activity() {
 
     private fun showTab(tab: Tab) {
         selectedTab=tab
-        if (tab!=Tab.MAP) disposeMap()
+        if (tab!=Tab.MAP) {
+            currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+            disposeMap()
+        }
         screen.removeAllViews()
         when (tab) {
             Tab.MAP -> showMapScreen()
@@ -93,7 +116,7 @@ class MainActivity : Activity() {
         screen.addView(map,FrameLayout.LayoutParams(-1,-1))
 
         val topNote=TextView(this).apply {
-            text="Sample map · location not tracked"; textSize=13f; setTextColor(Color.rgb(55,65,81))
+            text="Philippines · sample map"; textSize=13f; setTextColor(Color.rgb(55,65,81))
             setPadding(16,10,16,10); background=rounded(Color.WHITE,32,0x22000000)
             elevation=6f
         }
@@ -103,7 +126,7 @@ class MainActivity : Activity() {
         val camera=TextView(this).apply {
             text="📷"; textSize=26f; gravity=Gravity.CENTER; contentDescription="Add photo report"
             setTextColor(Color.WHITE); background=rounded(Color.rgb(37,99,235),60)
-            elevation=10f; setOnClickListener { showPhotoActions() }
+            elevation=10f; setOnClickListener { requestCamera() }
         }
         val cameraParams=FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(86) }
         screen.addView(camera,cameraParams)
@@ -116,7 +139,8 @@ class MainActivity : Activity() {
             currentMap=maplibreMap
             maplibreMap.setStyle("https://styles.maptoolkit.org/street.json") {
                 currentStyleReady=true
-                maplibreMap.cameraPosition=CameraPosition.Builder().target(LatLng(14.5995,120.9842)).zoom(15.5).build()
+                maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
+                maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
                 maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.5996,120.9840),LatLng(14.5987,120.9852)).color(Color.rgb(37,99,235)).width(6f))
                 maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.6008,120.9842),LatLng(14.5987,120.9852)).color(Color.rgb(22,163,74)).width(6f))
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
@@ -143,101 +167,186 @@ class MainActivity : Activity() {
         screen.addView(bar,params)
     }
 
-    private fun showPhotoActions() {
-        AlertDialog.Builder(this).setTitle("Add a photo report")
-            .setItems(arrayOf("Take photo", "Choose photos")) { _,which ->
-                capturedPhotos.clear()
-                if (which==0) launchCamera() else launchPhotoPicker()
-            }.show()
+    private fun requestCamera() {
+        if(ContextCompat.checkSelfPermission(this,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED) {
+            capturedPhotos.clear(); cameraModeBatch=false; showCameraScreen()
+        } else requestPermissions(arrayOf(Manifest.permission.CAMERA),REQUEST_CAMERA_PERMISSION)
     }
 
-    private fun launchCamera() {
+    @Deprecated("Camera permission callback")
+    override fun onRequestPermissionsResult(requestCode: Int,permissions: Array<String>,grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+        if(requestCode==REQUEST_CAMERA_PERMISSION) {
+            if(grantResults.firstOrNull()==PackageManager.PERMISSION_GRANTED) {
+                capturedPhotos.clear(); cameraModeBatch=false; showCameraScreen()
+            } else toast("Camera access is needed to take a photo.")
+        }
+    }
+
+    private fun showCameraScreen() {
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        disposeMap(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
+        window.statusBarColor=Color.BLACK; window.navigationBarColor=Color.BLACK
+        window.decorView.systemUiVisibility=0
+        val preview=PreviewView(this).apply { scaleType=PreviewView.ScaleType.FILL_CENTER }
+        screen.addView(preview,FrameLayout.LayoutParams(-1,-1))
+        val controller=LifecycleCameraController(this).apply { bindToLifecycle(this@MainActivity) }
+        preview.controller=controller; cameraController=controller
+
+        val close=TextView(this).apply {
+            text="×"; textSize=34f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
+            background=rounded(0x55000000,30); contentDescription="Close camera"
+            setOnClickListener { finishCamera(false) }
+        }
+        screen.addView(close,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.START).apply { setMargins(dp(18),dp(22),0,0) })
+
+        val done=TextView(this).apply {
+            text="Done 0"; textSize=15f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
+            setPadding(dp(15),dp(8),dp(15),dp(8)); background=rounded(0x55000000,30)
+            contentDescription="Done taking photos"; visibility=View.GONE
+            setOnClickListener { finishCamera(true) }
+        }
+        screen.addView(done,FrameLayout.LayoutParams(-2,dp(44),Gravity.TOP or Gravity.END).apply { setMargins(0,dp(26),dp(18),0) })
+
+        val modes=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER; background=rounded(0xCC111827.toInt(),28)
+            setPadding(dp(4),dp(4),dp(4),dp(4))
+        }
+        val single=TextView(this).apply { text="Single"; gravity=Gravity.CENTER; setPadding(dp(18),dp(9),dp(18),dp(9)) }
+        val batch=TextView(this).apply { text="Batch"; gravity=Gravity.CENTER; setPadding(dp(18),dp(9),dp(18),dp(9)) }
+        single.setOnClickListener { cameraModeBatch=false; updateCameraMode(single,batch,done) }
+        batch.setOnClickListener { cameraModeBatch=true; updateCameraMode(single,batch,done) }
+        modes.addView(single); modes.addView(batch)
+        screen.addView(modes,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(132) })
+
+        val shutter=FrameLayout(this).apply { background=rounded(Color.WHITE,60); elevation=10f; contentDescription="Take photo"; isClickable=true }
+        val inner=View(this).apply { background=rounded(Color.rgb(37,99,235),60) }
+        shutter.addView(inner,FrameLayout.LayoutParams(dp(62),dp(62),Gravity.CENTER))
+        shutter.setOnClickListener { capturePhoto(done) }
+        screen.addView(shutter,FrameLayout.LayoutParams(dp(82),dp(82),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(32) })
+        updateCameraMode(single,batch,done)
+    }
+
+    private fun updateCameraMode(single: TextView,batch: TextView,done: TextView) {
+        single.setTextColor(if(cameraModeBatch) Color.WHITE else Color.rgb(17,24,39))
+        single.background=if(cameraModeBatch) null else rounded(Color.WHITE,24)
+        batch.setTextColor(if(cameraModeBatch) Color.rgb(17,24,39) else Color.WHITE)
+        batch.background=if(cameraModeBatch) rounded(Color.WHITE,24) else null
+        done.visibility=if(cameraModeBatch && capturedPhotos.isNotEmpty()) View.VISIBLE else View.GONE
+        done.text="Done ${capturedPhotos.size}"
+    }
+
+    private fun capturePhoto(done: TextView) {
+        val controller=cameraController ?: return
         val file=File(photoDir,"walkit_${System.currentTimeMillis()}.jpg")
-        pendingCameraPath=file.absolutePath
-        val uri=FileProvider.getUriForFile(this,"$packageName.fileprovider",file)
-        val intent=Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-            putExtra(MediaStore.EXTRA_OUTPUT,uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        }
-        try { startActivityForResult(intent,REQUEST_CAMERA) }
-        catch (_: Exception) { toast("No camera app is available.") }
-    }
-
-    private fun launchPhotoPicker() {
-        val intent=Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type="image/*"
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true)
-        }
-        startActivityForResult(intent,REQUEST_PICK)
-    }
-
-    @Deprecated("Uses activity result codes to support the platform camera intent")
-    override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
-        super.onActivityResult(requestCode,resultCode,data)
-        if (resultCode!=RESULT_OK) return
-        when(requestCode) {
-            REQUEST_CAMERA -> {
-                pendingCameraPath?.let { path -> if(File(path).exists() && File(path).length()>0) capturedPhotos.add(path) }
-                if(capturedPhotos.isEmpty()) { toast("No photo was captured."); return }
-                AlertDialog.Builder(this).setTitle("Photo added")
-                    .setMessage("Take another photo for this report?")
-                    .setNegativeButton("Continue") { _,_ -> showPhotoForm() }
-                    .setPositiveButton("Take another") { _,_ -> launchCamera() }.show()
+        val output=ImageCapture.OutputFileOptions.Builder(file).build()
+        controller.takePicture(output,ContextCompat.getMainExecutor(this),object: ImageCapture.OnImageSavedCallback {
+            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                capturedPhotos.add(file.absolutePath)
+                if(cameraModeBatch) {
+                    done.text="Done ${capturedPhotos.size}"; done.visibility=View.VISIBLE
+                    toast("Photo ${capturedPhotos.size} added")
+                } else finishCamera(true)
             }
-            REQUEST_PICK -> {
-                val uris=mutableListOf<Uri>()
-                data?.clipData?.let { clip -> for(i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri) }
-                if(uris.isEmpty()) data?.data?.let(uris::add)
-                worker.execute {
-                    uris.forEach { uri -> copyPhoto(uri)?.let(capturedPhotos::add) }
-                    runOnUiThread { if(capturedPhotos.isEmpty()) toast("No photos selected.") else showPhotoForm() }
-                }
-            }
-        }
+            override fun onError(exception: ImageCaptureException) { toast("Could not capture photo. Try again.") }
+        })
     }
 
-    private fun copyPhoto(uri: Uri): String? = try {
-        val file=File(photoDir,"walkit_${System.currentTimeMillis()}_${(0..9999).random()}.jpg")
-        contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use(input::copyTo) }
-        if(file.exists() && file.length()>0) file.absolutePath else null
-    } catch (_: Exception) { null }
+    private fun finishCamera(keepPhotos: Boolean) {
+        cameraController?.unbind(); cameraController=null
+        window.statusBarColor=Color.rgb(248,250,252); window.navigationBarColor=Color.WHITE
+        window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        if(keepPhotos && capturedPhotos.isNotEmpty()) { showTab(Tab.MAP); showPhotoForm() }
+        else { capturedPhotos.clear(); showTab(Tab.MAP) }
+    }
 
     private fun showPhotoForm() {
         if(capturedPhotos.isEmpty()) return
-        val pad=dp(20)
-        val form=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(pad,dp(8),pad,0) }
-        val preview=TextView(this).apply {
-            text="${capturedPhotos.size} photo${if(capturedPhotos.size==1) "" else "s"} ready to submit"
-            textSize=15f; setTextColor(Color.rgb(55,65,81)); setPadding(0,0,0,dp(10))
-        }
-        val description=EditText(this).apply { hint="Description"; minLines=2; gravity=Gravity.TOP; inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES }
-        val time=EditText(this).apply { hint="Time"; setSingleLine(true); setText(SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(Date())) }
-        val target=currentMap?.cameraPosition?.target
-        val location=EditText(this).apply {
-            hint="Location (latitude, longitude)"; setSingleLine(true)
-            if(target!=null) setText("${"%.6f".format(Locale.US,target.latitude)}, ${"%.6f".format(Locale.US,target.longitude)}")
-        }
-        form.addView(preview); form.addView(description); form.addView(time); form.addView(location)
-        AlertDialog.Builder(this).setTitle("Photo report").setView(form)
-            .setNegativeButton("Cancel") { _,_ -> capturedPhotos.clear() }
-            .setPositiveButton("Submit",null).create().also { dialog ->
-                dialog.setOnShowListener {
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                        val parts=location.text.toString().split(",").map { it.trim() }
-                        val lat=parts.getOrNull(0)?.toDoubleOrNull(); val lon=parts.getOrNull(1)?.toDoubleOrNull()
-                        if(description.text.toString().isBlank()) { description.error="Add a description"; return@setOnClickListener }
-                        if(lat==null || lon==null || lat !in -90.0..90.0 || lon !in -180.0..180.0) { location.error="Enter latitude, longitude"; return@setOnClickListener }
-                        val owner=userId ?: return@setOnClickListener
-                        val paths=capturedPhotos.toList()
-                        runDb({ db.savePhotoReport(owner,description.text.toString(),time.text.toString(),"$lat, $lon",paths) }) { id ->
-                            val report=PhotoReport(id,description.text.toString(),time.text.toString(),"$lat, $lon",paths)
-                            if(selectedTab!=Tab.MAP) showTab(Tab.MAP) else addPhotoMarkers(report)
-                            capturedPhotos.clear(); dialog.dismiss(); toast("Photo report added to the map.")
-                        }
-                    }
-                }
-                dialog.show()
+        val sheet=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL; setPadding(dp(20),dp(12),dp(20),dp(20))
+            background=android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.WHITE); cornerRadii=floatArrayOf(dp(28).toFloat(),dp(28).toFloat(),dp(28).toFloat(),dp(28).toFloat(),0f,0f,0f,0f)
             }
+        }
+        val handle=View(this).apply { background=rounded(Color.rgb(209,213,219),8) }
+        sheet.addView(handle,LinearLayout.LayoutParams(dp(42),dp(5)).apply { gravity=Gravity.CENTER_HORIZONTAL; bottomMargin=dp(14) })
+        val header=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        val title=TextView(this).apply { text="New map report"; textSize=21f; setTextColor(Color.rgb(17,24,39)); setTypeface(null,android.graphics.Typeface.BOLD) }
+        val count=TextView(this).apply { text="${capturedPhotos.size} photo${if(capturedPhotos.size==1) "" else "s"}"; textSize=13f; setTextColor(Color.rgb(75,85,99)); gravity=Gravity.END }
+        header.addView(title,LinearLayout.LayoutParams(0,-2,1f)); header.addView(count)
+        sheet.addView(header)
+        sheet.addView(TextView(this).apply { text="Add a clear description and where you found it."; textSize=14f; setTextColor(Color.rgb(107,114,128)); setPadding(0,dp(4),0,dp(12)) })
+
+        val photoStrip=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        val photoScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(photoStrip) }
+        fun fillPhotoStrip() {
+            photoStrip.removeAllViews()
+            capturedPhotos.forEach { path ->
+                val tile=ImageView(this).apply {
+                    setImageBitmap(BitmapFactory.decodeFile(path,BitmapFactory.Options().apply { inSampleSize=8 }))
+                    scaleType=ImageView.ScaleType.CENTER_CROP; background=rounded(Color.rgb(229,231,235),14); clipToOutline=true
+                }
+                photoStrip.addView(tile,LinearLayout.LayoutParams(dp(82),dp(82)).apply { rightMargin=dp(8) })
+            }
+            val add=TextView(this).apply {
+                text="+\nAdd more"; gravity=Gravity.CENTER; textSize=13f; setTextColor(Color.rgb(37,99,235))
+                background=rounded(Color.rgb(239,246,255),14,Color.rgb(191,219,254)); setOnClickListener {
+                    photoDialog?.dismiss(); photoPicker.launch(arrayOf("image/*"))
+                }
+            }
+            photoStrip.addView(add,LinearLayout.LayoutParams(dp(82),dp(82)))
+        }
+        fillPhotoStrip()
+        sheet.addView(photoScroll,LinearLayout.LayoutParams(-1,dp(88)).apply { bottomMargin=dp(14) })
+
+        fun input(hint: String,multiline: Boolean=false)=EditText(this).apply {
+            this.hint=hint; textSize=15f; setTextColor(Color.rgb(31,41,55)); setHintTextColor(Color.rgb(156,163,175))
+            setPadding(dp(14),dp(12),dp(14),dp(12)); background=rounded(Color.rgb(249,250,251),14,Color.rgb(229,231,235))
+            if(multiline) { minLines=2; gravity=Gravity.TOP; inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES }
+            else setSingleLine(true)
+        }
+        val description=input("What did you notice?")
+        val time=input("Date and time")
+        time.setText(SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(Date()))
+        val location=input("Latitude, longitude")
+        val target=mapTarget
+        location.setText("${"%.6f".format(Locale.US,target.latitude)}, ${"%.6f".format(Locale.US,target.longitude)}")
+        sheet.addView(description,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(8) })
+        val metadata=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        metadata.addView(time,LinearLayout.LayoutParams(0,-2,1f).apply { rightMargin=dp(6) })
+        metadata.addView(location,LinearLayout.LayoutParams(0,-2,1.25f).apply { leftMargin=dp(6) })
+        sheet.addView(metadata)
+        val submit=TextView(this).apply {
+            text="Submit report"; textSize=16f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
+            setTypeface(null,android.graphics.Typeface.BOLD); background=rounded(Color.rgb(37,99,235),16)
+            setPadding(0,dp(14),0,dp(14)); elevation=3f
+        }
+        sheet.addView(submit,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(14) })
+        val dialog=Dialog(this)
+        photoDialog=dialog
+        dialog.setContentView(sheet)
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(-1,-2); setGravity(Gravity.BOTTOM); addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes=attributes.apply { dimAmount=0.42f }
+        }
+        submit.setOnClickListener {
+            val parts=location.text.toString().split(",").map { it.trim() }
+            val lat=parts.getOrNull(0)?.toDoubleOrNull(); val lon=parts.getOrNull(1)?.toDoubleOrNull()
+            if(description.text.toString().isBlank()) { description.error="Add a description"; return@setOnClickListener }
+            if(time.text.toString().isBlank()) { time.error="Add a time"; return@setOnClickListener }
+            if(lat==null || lon==null || lat !in 4.0..21.8 || lon !in 116.0..127.0) { location.error="Choose a location in the Philippines"; return@setOnClickListener }
+            val owner=userId ?: return@setOnClickListener
+            val paths=capturedPhotos.toList(); submit.isEnabled=false; submit.text="Submitting…"
+            runDb({ db.savePhotoReport(owner,description.text.toString(),time.text.toString(),"$lat, $lon",paths) }) { id ->
+                val report=PhotoReport(id,description.text.toString(),time.text.toString(),"$lat, $lon",paths)
+                mapTarget=LatLng(lat,lon); mapZoom=16.0
+                dialog.dismiss(); capturedPhotos.clear(); showTab(Tab.MAP); toast("Report added to the map.")
+            }
+        }
+        dialog.setOnDismissListener { if(photoDialog===dialog) photoDialog=null }
+        dialog.show()
+        dialog.window?.setLayout(-1,-2)
     }
 
     private fun addPhotoMarkers(report: PhotoReport) {
@@ -297,5 +406,5 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView?.onSaveInstanceState(outState) }
     override fun onDestroy() { disposeMap(); worker.shutdown(); db.close(); super.onDestroy() }
 
-    companion object { private const val REQUEST_CAMERA=20; private const val REQUEST_PICK=21 }
+    companion object { private const val REQUEST_CAMERA_PERMISSION=22 }
 }

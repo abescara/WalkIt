@@ -1,0 +1,21 @@
+name: Bug report
+description: Report a reproducible WalkIt issue
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
