@@ -28,7 +28,6 @@ import androidx.core.content.ContextCompat
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
-import org.maplibre.android.annotations.PolylineOptions
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -71,10 +70,12 @@ class MainActivity : ComponentActivity() {
     private var pendingLocationListener: LocationListener? = null
     private var lastUserLocation: LatLng? = null
     private var userLocationMarker: org.maplibre.android.annotations.Marker? = null
+    private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
     private var mapTarget = LatLng(12.8797,121.7740)
     private var mapZoom = 5.5
 
     private enum class Tab { MAP, FORUMS, PROFILE }
+    private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -134,9 +135,11 @@ class MainActivity : ComponentActivity() {
         val topParams=FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin=18 }
         screen.addView(topNote,topParams)
 
-        val camera=TextView(this).apply {
-            text="📷"; textSize=26f; gravity=Gravity.CENTER; contentDescription="Add photo report"
-            setTextColor(Color.WHITE); background=rounded(Color.rgb(37,99,235),60)
+        val camera=ImageView(this).apply {
+            setImageBitmap(makeCameraIcon())
+            contentDescription="Add photo report"
+            scaleType=ImageView.ScaleType.CENTER
+            background=rounded(Color.rgb(37,99,235),60)
             elevation=10f; setOnClickListener { requestCamera() }
         }
         val cameraParams=FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(86) }
@@ -162,8 +165,11 @@ class MainActivity : ComponentActivity() {
                 maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
                 maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
                 lastUserLocation?.let { addUserLocationMarker(it) }
-                maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.5996,120.9840),LatLng(14.5987,120.9852)).color(Color.rgb(37,99,235)).width(6f))
-                maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.6008,120.9842),LatLng(14.5987,120.9852)).color(Color.rgb(22,163,74)).width(6f))
+                photoMarkerDetails.clear()
+                maplibreMap.setOnMarkerClickListener { marker ->
+                    photoMarkerDetails[marker.id]?.let { showPhotoDetails(it) }
+                    true
+                }
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
             }
         }
@@ -368,7 +374,6 @@ class MainActivity : ComponentActivity() {
         canvas.drawCircle(size/2f,size/2f,dp(6).toFloat(),paint)
         val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
         userLocationMarker=map.addMarker(MarkerOptions().position(point).title("You are here").icon(icon))
-        bitmap.recycle()
     }
 
     private fun finishCamera(keepPhotos: Boolean) {
@@ -474,14 +479,115 @@ class MainActivity : ComponentActivity() {
         val coordinates=report.location.split(",").map { it.trim().toDoubleOrNull() ?: return }
         if(coordinates.size!=2) return
         val point=LatLng(coordinates[0],coordinates[1])
-        report.photos.forEachIndexed { index,path ->
-            val bitmap=makePhotoBubble(path) ?: return@forEachIndexed
-            val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
-            val spread=index/2+1
-            val offset=if(index==0) 0.0 else spread*0.000025
-            val location=if(index%2==0) LatLng(point.latitude+offset,point.longitude) else LatLng(point.latitude,point.longitude+offset)
-            map.addMarker(MarkerOptions().position(location).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
+        val photos=report.photos.filter { File(it).exists() }
+        val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it) } ?: makePhotoPlaceholder()
+        val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
+        val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
+        photoMarkerDetails[marker.id]=PhotoMarkerDetail(report,photos)
+    }
+
+    private fun showPhotoDetails(detail: PhotoMarkerDetail) {
+        val report=detail.report
+        val sheet=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(20),dp(12),dp(20),dp(24))
+            background=android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadii=floatArrayOf(dp(28).toFloat(),dp(28).toFloat(),dp(28).toFloat(),dp(28).toFloat(),0f,0f,0f,0f)
+            }
         }
+        sheet.addView(View(this).apply { background=rounded(Color.rgb(209,213,219),8) },LinearLayout.LayoutParams(dp(42),dp(5)).apply {
+            gravity=Gravity.CENTER_HORIZONTAL; bottomMargin=dp(14)
+        })
+        val hero=ImageView(this).apply {
+            scaleType=ImageView.ScaleType.CENTER_CROP
+            background=rounded(Color.rgb(229,231,235),18)
+            clipToOutline=true
+        }
+        val firstPhoto=detail.photos.firstOrNull()
+        if(firstPhoto!=null) hero.setImageBitmap(loadPhotoPreview(firstPhoto,dp(420)))
+        else hero.setImageBitmap(makePhotoPlaceholder())
+        sheet.addView(hero,LinearLayout.LayoutParams(-1,dp(236)).apply { bottomMargin=dp(12) })
+
+        if(detail.photos.size>1) {
+            val strip=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+            detail.photos.forEach { path ->
+                val thumbnail=ImageView(this).apply {
+                    setImageBitmap(loadPhotoPreview(path,dp(120)))
+                    scaleType=ImageView.ScaleType.CENTER_CROP
+                    background=rounded(Color.rgb(229,231,235),12)
+                    clipToOutline=true
+                    contentDescription="View report photo"
+                    setOnClickListener { hero.setImageBitmap(loadPhotoPreview(path,dp(420))) }
+                }
+                strip.addView(thumbnail,LinearLayout.LayoutParams(dp(72),dp(72)).apply { rightMargin=dp(8) })
+            }
+            val photosScroll=HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled=false
+                addView(strip)
+            }
+            sheet.addView(photosScroll,LinearLayout.LayoutParams(-1,dp(78)).apply { bottomMargin=dp(10) })
+        }
+
+        sheet.addView(TextView(this).apply {
+            text=report.description
+            textSize=20f
+            setTextColor(Color.rgb(17,24,39))
+            setTypeface(null,android.graphics.Typeface.BOLD)
+        })
+        sheet.addView(TextView(this).apply {
+            text="${report.time}  ·  ${report.location}"
+            textSize=13f
+            setTextColor(Color.rgb(107,114,128))
+            setPadding(0,dp(5),0,dp(2))
+        })
+
+        val dialog=Dialog(this)
+        dialog.setContentView(sheet)
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(-1,-2)
+            setGravity(Gravity.BOTTOM)
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes=attributes.apply { dimAmount=0.42f }
+        }
+        dialog.show()
+        dialog.window?.setLayout(-1,-2)
+    }
+
+    private fun loadPhotoPreview(path: String,size: Int): Bitmap? = try {
+        val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+        BitmapFactory.decodeFile(path,bounds)
+        var sample=1
+        while(bounds.outWidth/sample>size*2 || bounds.outHeight/sample>size*2) sample*=2
+        BitmapFactory.decodeFile(path,BitmapFactory.Options().apply { inSampleSize=sample })
+    } catch (_: Exception) { null }
+
+    private fun makePhotoPlaceholder(): Bitmap {
+        val size=dp(58)
+        val bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888)
+        val canvas=Canvas(bitmap)
+        val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(37,99,235) }
+        canvas.drawCircle(size/2f,size/2f,size/2f,paint)
+        paint.color=Color.WHITE
+        canvas.drawCircle(size/2f,size/2f,dp(13).toFloat(),paint)
+        paint.color=Color.rgb(37,99,235)
+        canvas.drawCircle(size/2f,size/2f,dp(9).toFloat(),paint)
+        return bitmap
+    }
+
+    private fun makeCameraIcon(): Bitmap {
+        val size=dp(34)
+        val bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888)
+        val canvas=Canvas(bitmap)
+        val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.WHITE; style=Paint.Style.FILL }
+        canvas.drawRoundRect(dp(3).toFloat(),dp(10).toFloat(),dp(31).toFloat(),dp(29).toFloat(),dp(4).toFloat(),dp(4).toFloat(),paint)
+        canvas.drawRoundRect(dp(9).toFloat(),dp(6).toFloat(),dp(19).toFloat(),dp(12).toFloat(),dp(2).toFloat(),dp(2).toFloat(),paint)
+        paint.color=Color.rgb(37,99,235)
+        canvas.drawCircle(size/2f,dp(19).toFloat(),dp(7).toFloat(),paint)
+        paint.color=Color.WHITE
+        canvas.drawCircle(size/2f,dp(19).toFloat(),dp(4).toFloat(),paint)
+        return bitmap
     }
 
     private fun makePhotoBubble(path: String): Bitmap? = try {
