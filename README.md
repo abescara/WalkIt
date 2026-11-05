@@ -4,7 +4,7 @@ WalkIt is a proposed offline Android app for recording pedestrian hazards and co
 
 ## Status
 
-**Proposal / project setup.** The Android application has not been implemented. The supplied proposal says the scope and demonstration area still require instructor review. This repository provides the source proposal and an actionable build plan so the team can begin development without misrepresenting planned features as finished.
+**Buildable MVP draft.** A small Android prototype now implements local accounts, hazard creation/listing/resolution/deletion, and a read-only comparison of two sample routes. The supplied proposal says the full scope and demonstration area still require instructor review. The remaining features are tracked in the implementation plan.
 
 ## Planned prototype
 
@@ -19,9 +19,11 @@ See [the project proposal](docs/WalkIt_Project_Proposal.pdf) for detailed requir
 
 ## Getting started
 
-1. Review the proposal with the instructor and confirm the demonstration area, sample segments, and routes.
-2. Create an Android Studio project using Kotlin, then commit the generated Gradle wrapper and app module. Do not commit machine-specific files or secrets.
-3. Implement the first sprint in the checklist and document test results as features are completed.
+1. Open this repository in Android Studio with JDK 17 and Android SDK 36 installed.
+2. Build and run the `app` configuration on an Android 8.0 (API 26) or newer device or emulator. Or run `./gradlew assembleDebug` (`.\gradlew.bat assembleDebug` on Windows).
+3. Create a synthetic account with a 12-character or longer password, then add a sample hazard report. Visit Compare routes to see active counts change. Sign out and back in to check persistence.
+
+The draft uses four clearly fictional pathway names and two sample routes. Replace them only after the team agrees on the demonstration area. See [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
 
 ## Safety and data limitations
 
