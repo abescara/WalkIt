@@ -7,16 +7,25 @@ import android.text.InputType
 import android.view.View
 import android.widget.*
 import java.util.concurrent.Executors
+import org.maplibre.android.MapLibre
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.annotations.PolylineOptions
+import android.graphics.Color
 
 class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var db: WalkItDb
     private lateinit var root: LinearLayout
     private var userId: Long? = null // Session intentionally ends when the process is killed.
+    private var mapView: MapView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = WalkItDb(this)
+        MapLibre.getInstance(this)
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24,24,24,24) }
         setContentView(ScrollView(this).apply { addView(root) })
         showAuth()
@@ -58,6 +67,7 @@ class MainActivity : Activity() {
         root.addView(label("Recorded conditions are unverified. Check your surroundings before walking."))
         root.addView(button("Hazard reports") { showReports() })
         root.addView(button("Compare routes") { showRoutes() })
+        root.addView(button("Open map") { showMap() })
         root.addView(button("Sign out") { userId=null; showAuth() })
     }
 
@@ -123,5 +133,35 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onDestroy() { worker.shutdown(); db.close(); super.onDestroy() }
+    private fun showMap() {
+        if (userId==null) return showAuth()
+        clear("WalkIt map")
+        root.addView(button("Back") { disposeMap(); showHome() })
+        root.addView(label("Illustrative sample routes and hazard pins around Manila. These are not real reports or your current location."))
+        val map=MapView(this)
+        mapView=map
+        root.addView(map, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 560))
+        root.addView(label("Map data © OpenStreetMap contributors · sample geometry only"))
+        map.onCreate(null)
+        map.onStart()
+        map.onResume()
+        map.getMapAsync { maplibreMap ->
+            maplibreMap.setStyle("https://demotiles.maplibre.org/style.json") {
+                maplibreMap.cameraPosition=CameraPosition.Builder().target(LatLng(14.5995,120.9842)).zoom(14.0).build()
+                maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.5996,120.9840),LatLng(14.5987,120.9852)).color(Color.rgb(37,99,235)).width(6f))
+                maplibreMap.addPolyline(PolylineOptions().add(LatLng(14.6000,120.9828),LatLng(14.6008,120.9842),LatLng(14.5987,120.9852)).color(Color.rgb(22,163,74)).width(6f))
+                maplibreMap.addMarker(MarkerOptions().position(LatLng(14.5996,120.9840)).title("Sample obstruction").snippet("Illustrative demo pin"))
+                maplibreMap.addMarker(MarkerOptions().position(LatLng(14.6008,120.9842)).title("Sample accessibility barrier").snippet("Illustrative demo pin"))
+            }
+        }
+    }
+
+    private fun disposeMap() { mapView?.onPause(); mapView?.onStop(); mapView?.onDestroy(); mapView=null }
+    override fun onStart() { super.onStart(); mapView?.onStart() }
+    override fun onResume() { super.onResume(); mapView?.onResume() }
+    override fun onPause() { mapView?.onPause(); super.onPause() }
+    override fun onStop() { mapView?.onStop(); super.onStop() }
+    override fun onLowMemory() { super.onLowMemory(); mapView?.onLowMemory() }
+    override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView?.onSaveInstanceState(outState) }
+    override fun onDestroy() { disposeMap(); worker.shutdown(); db.close(); super.onDestroy() }
 }

@@ -6,6 +6,8 @@
 - Local account creation and sign in. Passwords use per-account random salts and PBKDF2 hashes. Session is held only in memory.
 - Create and list shared hazard reports tied to sample pathway segments. The signed-in owner may mark their own reports resolved or delete them after confirmation. Ownership is checked in SQL updates and deletes.
 - View two predefined sample routes with distance, active report counts, and active accessibility barrier counts. The screen warns that zero recorded hazards does not prove safety.
+- Open an interactive MapLibre map with two illustrative route lines and sample hazard pins. The geometry is placed in central Manila only as a visual demo; it is not real WalkIt pathway data and does not use device location.
+- Show OpenStreetMap contributor attribution. The map style and tiles load from the internet; accounts and reports stay in local SQLite.
 - Database work runs on a background executor.
 
 ## Planned, not implemented
@@ -13,6 +15,7 @@
 - Report editing, search, filters, sorting, profiles, account deletion, login throttling, badge logic, leaderboard, saved routes, and preferences.
 - Eight separate Activities and Intent navigation. This initial draft uses one Activity with simple screens.
 - Full route preference sorting, production reference data, field observation date entry, and migrations.
+- Replacing illustrative map coordinates with instructor-approved segment coordinates and connecting stored reports to map pins.
 - Accessibility review, device tests, the proposal's 12 test cases, defect log, and usability improvements.
 
 ## Build verification
