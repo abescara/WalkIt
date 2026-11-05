@@ -28,6 +28,8 @@ import androidx.core.content.ContextCompat
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.annotations.Polyline
+import org.maplibre.android.annotations.PolylineOptions
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -38,6 +40,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
@@ -60,7 +66,22 @@ class MainActivity : ComponentActivity() {
                     file.absolutePath.takeIf { file.exists() && file.length()>0 }
                 } catch (_: Exception) { null }
             }
-            runOnUiThread { capturedPhotos.addAll(imported); showPhotoForm() }
+            runOnUiThread { capturedPhotos.addAll(imported); showPhotoLocationPicker() }
+        }
+    }
+    private var selectedDiscussionPhoto: String? = null
+    private var discussionPhotoPreview: ImageView? = null
+    private val discussionPhotoPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if(uri!=null) worker.execute {
+            val path=try {
+                val file=File(photoDir,"discussion_${System.currentTimeMillis()}.jpg")
+                contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use(input::copyTo) }
+                file.absolutePath.takeIf { file.exists() && file.length()>0 }
+            } catch (_: Exception) { null }
+            runOnUiThread {
+                selectedDiscussionPhoto=path
+                discussionPhotoPreview?.setImageBitmap(path?.let { loadPhotoPreview(it,dp(96)) })
+            }
         }
     }
     private var cameraController: LifecycleCameraController? = null
@@ -73,6 +94,13 @@ class MainActivity : ComponentActivity() {
     private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
     private var mapTarget = LatLng(12.8797,121.7740)
     private var mapZoom = 5.5
+    private var pickingPhotoLocation = false
+    private var routePlannerVisible = false
+    private var routePanelView: View? = null
+    private var routeOriginField: EditText? = null
+    private var routeDestinationField: EditText? = null
+    private var routeLine: Polyline? = null
+    private val routeMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
 
     private enum class Tab { MAP, FORUMS, PROFILE }
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>)
@@ -100,7 +128,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showTab(tab: Tab) {
         selectedTab=tab
-        if (tab!=Tab.MAP) {
+        if (tab!=Tab.MAP || currentMap!=null) {
             currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
             disposeMap()
         }
@@ -121,19 +149,33 @@ class MainActivity : ComponentActivity() {
         addBottomNavigation()
     }
 
-    private fun showMapScreen() {
+    private fun showPhotoLocationPicker() {
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        if(lastUserLocation!=null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
+        pickingPhotoLocation=true
+        routePlannerVisible=false
+        disposeMap()
+        screen.removeAllViews()
+        selectedTab=Tab.MAP
+        showMapScreen(photoLocationPicking=true)
+    }
+
+    private fun confirmPhotoLocation() {
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        if(mapTarget.latitude !in 4.0..21.8 || mapTarget.longitude !in 116.0..127.0) {
+            toast("Choose a point in the Philippines.")
+            return
+        }
+        pickingPhotoLocation=false
+        showTab(Tab.MAP)
+        showPhotoForm()
+    }
+
+    private fun showMapScreen(photoLocationPicking: Boolean = false) {
         screen.setBackgroundColor(Color.WHITE)
         val map=MapView(this)
         mapView=map
         screen.addView(map,FrameLayout.LayoutParams(-1,-1))
-
-        val topNote=TextView(this).apply {
-            text="Philippines · sample map"; textSize=13f; setTextColor(Color.rgb(55,65,81))
-            setPadding(16,10,16,10); background=rounded(Color.WHITE,32,0x22000000)
-            elevation=6f
-        }
-        val topParams=FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin=18 }
-        screen.addView(topNote,topParams)
 
         val camera=ImageView(this).apply {
             setImageBitmap(makeCameraIcon())
@@ -142,19 +184,61 @@ class MainActivity : ComponentActivity() {
             background=rounded(Color.rgb(37,99,235),60)
             elevation=10f; setOnClickListener { requestCamera() }
         }
-        val cameraParams=FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(86) }
-        screen.addView(camera,cameraParams)
+        if(!photoLocationPicking) {
+            val cameraParams=FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(86) }
+            screen.addView(camera,cameraParams)
+        }
 
         val locate=TextView(this).apply {
             text="◎"; textSize=30f; gravity=Gravity.CENTER; contentDescription="Show my location"
             setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
             elevation=8f; setOnClickListener { showMyLocation() }
         }
-        screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
-            rightMargin=dp(20); bottomMargin=dp(88)
+        screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.TOP).apply {
+            rightMargin=dp(18); topMargin=dp(26)
         })
 
-        addBottomNavigation()
+        if(photoLocationPicking) {
+            val centerPin=ImageView(this).apply {
+                setImageBitmap(makeMapPinIcon()); contentDescription="Selected photo location"
+                elevation=12f; translationY=-dp(27).toFloat()
+            }
+            screen.addView(centerPin,FrameLayout.LayoutParams(dp(44),dp(54),Gravity.CENTER))
+            val hint=TextView(this).apply {
+                text="Move the map to choose where this photo was taken"
+                textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.rgb(31,41,55))
+                setPadding(dp(16),dp(11),dp(16),dp(11)); background=rounded(Color.WHITE,28,0x22000000); elevation=8f
+            }
+            screen.addView(hint,FrameLayout.LayoutParams(-1,-2,Gravity.TOP).apply { setMargins(dp(18),dp(26),dp(82),0) })
+            val actions=LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL
+                setPadding(dp(8),dp(8),dp(8),dp(8)); background=rounded(Color.WHITE,20,0x22000000); elevation=10f
+            }
+            val cancel=TextView(this).apply {
+                text="Cancel"; textSize=15f; gravity=Gravity.CENTER; setTextColor(Color.rgb(75,85,99))
+                setOnClickListener { capturedPhotos.clear(); pickingPhotoLocation=false; showTab(Tab.MAP) }
+            }
+            val confirm=TextView(this).apply {
+                text="Use this location"; textSize=15f; gravity=Gravity.CENTER
+                setTextColor(Color.WHITE); setTypeface(null,android.graphics.Typeface.BOLD)
+                background=rounded(Color.rgb(37,99,235),14); setOnClickListener { confirmPhotoLocation() }
+            }
+            actions.addView(cancel,LinearLayout.LayoutParams(0,dp(48),1f))
+            actions.addView(confirm,LinearLayout.LayoutParams(0,dp(48),2f))
+            screen.addView(actions,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM).apply { setMargins(dp(18),0,dp(18),dp(22)) })
+        } else {
+            val routeToggle=TextView(this).apply {
+                text="⇄"; textSize=26f; gravity=Gravity.CENTER; contentDescription="Open route planner"
+                setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,28,0x22000000); elevation=8f
+                setOnClickListener { routePlannerVisible=!routePlannerVisible; showRoutePlannerPanel() }
+            }
+            screen.addView(routeToggle,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.END).apply {
+                rightMargin=dp(18); topMargin=dp(92)
+            })
+            if(routePlannerVisible) showRoutePlannerPanel()
+            addBottomNavigation()
+        }
+
         map.onCreate(null)
         map.onStart()
         map.onResume()
@@ -162,6 +246,7 @@ class MainActivity : ComponentActivity() {
             currentMap=maplibreMap
             maplibreMap.setStyle("https://styles.maptoolkit.org/street.json") {
                 currentStyleReady=true
+                maplibreMap.uiSettings.isCompassEnabled=false
                 maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
                 maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
                 lastUserLocation?.let { addUserLocationMarker(it) }
@@ -173,6 +258,7 @@ class MainActivity : ComponentActivity() {
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
             }
         }
+        if(photoLocationPicking && lastUserLocation==null) showMyLocation()
     }
 
     private fun addBottomNavigation() {
@@ -192,6 +278,129 @@ class MainActivity : ComponentActivity() {
         }
         val params=FrameLayout.LayoutParams(-1,dp(60),Gravity.BOTTOM).apply { setMargins(dp(16),0,dp(16),dp(12)) }
         screen.addView(bar,params)
+    }
+
+    private fun showRoutePlannerPanel() {
+        routePanelView?.let { screen.removeView(it) }
+        routePanelView=null
+        if(!routePlannerVisible || pickingPhotoLocation) return
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(16),dp(14),dp(16),dp(16))
+            background=rounded(Color.WHITE,20,0x22000000)
+            elevation=14f
+        }
+        val heading=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        heading.addView(TextView(this).apply {
+            text="Plan a route"; textSize=18f; setTextColor(Color.rgb(17,24,39)); setTypeface(null,android.graphics.Typeface.BOLD)
+        },LinearLayout.LayoutParams(0,-2,1f))
+        heading.addView(TextView(this).apply {
+            text="×"; textSize=26f; gravity=Gravity.CENTER; setTextColor(Color.rgb(107,114,128))
+            setOnClickListener { routePlannerVisible=false; showRoutePlannerPanel() }
+        },LinearLayout.LayoutParams(dp(36),dp(36)))
+        panel.addView(heading)
+
+        val defaultStart=lastUserLocation ?: currentMap?.cameraPosition?.target ?: mapTarget
+        val start=EditText(this).apply {
+            hint="Point A · latitude, longitude"; textSize=14f; isSingleLine=true
+            setText("${"%.6f".format(Locale.US,defaultStart.latitude)}, ${"%.6f".format(Locale.US,defaultStart.longitude)}")
+            setPadding(dp(12),dp(10),dp(12),dp(10)); background=rounded(Color.rgb(249,250,251),12,Color.rgb(229,231,235))
+        }
+        val end=EditText(this).apply {
+            hint="Point B · latitude, longitude"; textSize=14f; isSingleLine=true
+            setPadding(dp(12),dp(10),dp(12),dp(10)); background=rounded(Color.rgb(249,250,251),12,Color.rgb(229,231,235))
+        }
+        routeOriginField=start
+        routeDestinationField=end
+        panel.addView(start,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(6) })
+        val setStart=TextView(this).apply {
+            text="Set A to map center"; textSize=12f; setTextColor(Color.rgb(37,99,235)); gravity=Gravity.END
+            setOnClickListener { currentMap?.cameraPosition?.target?.let { start.setText(formatCoordinate(it)) } }
+        }
+        panel.addView(setStart,LinearLayout.LayoutParams(-1,dp(30)))
+        panel.addView(end,LinearLayout.LayoutParams(-1,-2))
+        val setEnd=TextView(this).apply {
+            text="Set B to map center"; textSize=12f; setTextColor(Color.rgb(37,99,235)); gravity=Gravity.END
+            setOnClickListener { currentMap?.cameraPosition?.target?.let { end.setText(formatCoordinate(it)) } }
+        }
+        panel.addView(setEnd,LinearLayout.LayoutParams(-1,dp(30)))
+        val actions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        val useLocation=TextView(this).apply {
+            text="My location"; textSize=13f; gravity=Gravity.CENTER; setTextColor(Color.rgb(37,99,235))
+            setPadding(dp(8),dp(10),dp(8),dp(10)); setOnClickListener { showMyLocation() }
+        }
+        val findRoute=TextView(this).apply {
+            text="Find route"; textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
+            setTypeface(null,android.graphics.Typeface.BOLD); background=rounded(Color.rgb(37,99,235),12)
+            setPadding(dp(14),dp(11),dp(14),dp(11)); setOnClickListener { requestWalkingRoute(start,end,this) }
+        }
+        actions.addView(useLocation,LinearLayout.LayoutParams(0,-2,1f))
+        actions.addView(findRoute)
+        panel.addView(actions)
+        routePanelView=panel
+        screen.addView(panel,FrameLayout.LayoutParams(-1,-2,Gravity.TOP or Gravity.END).apply {
+            setMargins(dp(18),dp(154),dp(18),0)
+        })
+    }
+
+    private fun formatCoordinate(point: LatLng) = "${"%.6f".format(Locale.US,point.latitude)}, ${"%.6f".format(Locale.US,point.longitude)}"
+
+    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView) {
+        fun parse(value: String): LatLng? {
+            val pieces=value.split(",").map { it.trim().toDoubleOrNull() ?: return null }
+            if(pieces.size!=2 || pieces[0] !in 4.0..21.8 || pieces[1] !in 116.0..127.0) return null
+            return LatLng(pieces[0],pieces[1])
+        }
+        val from=parse(start.text.toString())
+        val to=parse(end.text.toString())
+        if(from==null) { start.error="Enter a valid Philippines coordinate"; return }
+        if(to==null) { end.error="Enter a valid Philippines coordinate"; return }
+        button.isEnabled=false
+        button.text="Finding…"
+        worker.execute {
+            try {
+                val pair="${from.longitude},${from.latitude}|${to.longitude},${to.latitude}"
+                val query=URLEncoder.encode(pair,"UTF-8")
+                val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=hiking-mountain&alternativeidx=0&format=geojson").openConnection() as HttpURLConnection).apply {
+                    connectTimeout=15_000; readTimeout=25_000; requestMethod="GET"
+                }
+                val response=try {
+                    if(connection.responseCode !in 200..299) error("Route service returned ${connection.responseCode}")
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } finally { connection.disconnect() }
+                val features=JSONObject(response).getJSONArray("features")
+                val coordinates=features.getJSONObject(0).getJSONObject("geometry").getJSONArray("coordinates")
+                val points=(0 until coordinates.length()).map { index ->
+                    val coordinate=coordinates.getJSONArray(index)
+                    LatLng(coordinate.getDouble(1),coordinate.getDouble(0))
+                }
+                if(points.size<2) error("No route was found")
+                runOnUiThread {
+                    button.isEnabled=true; button.text="Find route"
+                    displayRoute(points,from,to)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    button.isEnabled=true; button.text="Find route"
+                    toast("Could not find a walking route: ${e.message ?: "try again"}")
+                }
+            }
+        }
+    }
+
+    private fun displayRoute(points: List<LatLng>,from: LatLng,to: LatLng) {
+        val map=currentMap ?: return
+        routeLine?.let { map.removePolyline(it) }
+        routeMarkers.forEach { map.removeMarker(it) }
+        routeMarkers.clear()
+        val lineOptions=PolylineOptions().add(points.first()).color(Color.rgb(37,99,235)).width(6f)
+        points.drop(1).forEach { lineOptions.add(it) }
+        routeLine=map.addPolyline(lineOptions)
+        routeMarkers.add(map.addMarker(MarkerOptions().position(from).title("Point A")))
+        routeMarkers.add(map.addMarker(MarkerOptions().position(to).title("Point B")))
+        val bounds=LatLngBounds.Builder().include(from).include(to).build()
+        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,dp(64)),800)
+        toast("Walking route ready.")
     }
 
     private fun requestCamera() {
@@ -354,6 +563,7 @@ class MainActivity : ComponentActivity() {
         lastUserLocation=point
         mapTarget=point
         mapZoom=16.0
+        routeOriginField?.setText(formatCoordinate(point))
         addUserLocationMarker(point)
         currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
     }
@@ -380,7 +590,7 @@ class MainActivity : ComponentActivity() {
         cameraController?.unbind(); cameraController=null
         window.statusBarColor=Color.rgb(248,250,252); window.navigationBarColor=Color.WHITE
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        if(keepPhotos && capturedPhotos.isNotEmpty()) { showTab(Tab.MAP); showPhotoForm() }
+        if(keepPhotos && capturedPhotos.isNotEmpty()) showPhotoLocationPicker()
         else { capturedPhotos.clear(); showTab(Tab.MAP) }
     }
 
@@ -432,14 +642,23 @@ class MainActivity : ComponentActivity() {
         val description=input("What did you notice?")
         val time=input("Date and time")
         time.setText(SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(Date()))
-        val location=input("Latitude, longitude")
         val target=mapTarget
-        location.setText("${"%.6f".format(Locale.US,target.latitude)}, ${"%.6f".format(Locale.US,target.longitude)}")
         sheet.addView(description,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(8) })
         val metadata=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
         metadata.addView(time,LinearLayout.LayoutParams(0,-2,1f).apply { rightMargin=dp(6) })
+        val location=TextView(this).apply {
+            text="📍  ${"%.5f".format(Locale.US,target.latitude)}, ${"%.5f".format(Locale.US,target.longitude)}"
+            textSize=13f; gravity=Gravity.CENTER_VERTICAL; setTextColor(Color.rgb(55,65,81))
+            setPadding(dp(10),dp(12),dp(8),dp(12)); background=rounded(Color.rgb(249,250,251),14,Color.rgb(229,231,235))
+        }
         metadata.addView(location,LinearLayout.LayoutParams(0,-2,1.25f).apply { leftMargin=dp(6) })
         sheet.addView(metadata)
+        val changeLocation=TextView(this).apply {
+            text="Change map pin"; textSize=13f; setTextColor(Color.rgb(37,99,235)); gravity=Gravity.END
+            setPadding(0,dp(8),dp(4),0)
+            setOnClickListener { photoDialog?.dismiss(); showPhotoLocationPicker() }
+        }
+        sheet.addView(changeLocation,LinearLayout.LayoutParams(-1,-2))
         val submit=TextView(this).apply {
             text="Submit report"; textSize=16f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
             setTypeface(null,android.graphics.Typeface.BOLD); background=rounded(Color.rgb(37,99,235),16)
@@ -455,16 +674,15 @@ class MainActivity : ComponentActivity() {
             attributes=attributes.apply { dimAmount=0.42f }
         }
         submit.setOnClickListener {
-            val parts=location.text.toString().split(",").map { it.trim() }
-            val lat=parts.getOrNull(0)?.toDoubleOrNull(); val lon=parts.getOrNull(1)?.toDoubleOrNull()
+            val lat=target.latitude; val lon=target.longitude
             if(description.text.toString().isBlank()) { description.error="Add a description"; return@setOnClickListener }
             if(time.text.toString().isBlank()) { time.error="Add a time"; return@setOnClickListener }
-            if(lat==null || lon==null || lat !in 4.0..21.8 || lon !in 116.0..127.0) { location.error="Choose a location in the Philippines"; return@setOnClickListener }
+            if(lat !in 4.0..21.8 || lon !in 116.0..127.0) { toast("Choose a location in the Philippines."); return@setOnClickListener }
             val owner=userId ?: return@setOnClickListener
             val paths=capturedPhotos.toList(); submit.isEnabled=false; submit.text="Submitting…"
             runDb({ db.savePhotoReport(owner,description.text.toString(),time.text.toString(),"$lat, $lon",paths) }) { id ->
                 val report=PhotoReport(id,description.text.toString(),time.text.toString(),"$lat, $lon",paths)
-                mapTarget=LatLng(lat,lon); mapZoom=16.0
+                mapTarget=LatLng(lat,lon); mapZoom=maxOf(mapZoom,16.0)
                 dialog.dismiss(); capturedPhotos.clear(); showTab(Tab.MAP); toast("Report added to the map.")
             }
         }
@@ -490,7 +708,7 @@ class MainActivity : ComponentActivity() {
         val report=detail.report
         val sheet=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(20),dp(12),dp(20),dp(24))
+            setPadding(dp(20),dp(12),dp(20),dp(16))
             background=android.graphics.drawable.GradientDrawable().apply {
                 setColor(Color.WHITE)
                 cornerRadii=floatArrayOf(dp(28).toFloat(),dp(28).toFloat(),dp(28).toFloat(),dp(28).toFloat(),0f,0f,0f,0f)
@@ -507,7 +725,7 @@ class MainActivity : ComponentActivity() {
         val firstPhoto=detail.photos.firstOrNull()
         if(firstPhoto!=null) hero.setImageBitmap(loadPhotoPreview(firstPhoto,dp(420)))
         else hero.setImageBitmap(makePhotoPlaceholder())
-        sheet.addView(hero,LinearLayout.LayoutParams(-1,dp(236)).apply { bottomMargin=dp(12) })
+        sheet.addView(hero,LinearLayout.LayoutParams(-1,dp(180)).apply { bottomMargin=dp(10) })
 
         if(detail.photos.size>1) {
             val strip=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
@@ -520,13 +738,13 @@ class MainActivity : ComponentActivity() {
                     contentDescription="View report photo"
                     setOnClickListener { hero.setImageBitmap(loadPhotoPreview(path,dp(420))) }
                 }
-                strip.addView(thumbnail,LinearLayout.LayoutParams(dp(72),dp(72)).apply { rightMargin=dp(8) })
+                strip.addView(thumbnail,LinearLayout.LayoutParams(dp(62),dp(62)).apply { rightMargin=dp(8) })
             }
             val photosScroll=HorizontalScrollView(this).apply {
                 isHorizontalScrollBarEnabled=false
                 addView(strip)
             }
-            sheet.addView(photosScroll,LinearLayout.LayoutParams(-1,dp(78)).apply { bottomMargin=dp(10) })
+            sheet.addView(photosScroll,LinearLayout.LayoutParams(-1,dp(68)).apply { bottomMargin=dp(8) })
         }
 
         sheet.addView(TextView(this).apply {
@@ -542,17 +760,101 @@ class MainActivity : ComponentActivity() {
             setPadding(0,dp(5),0,dp(2))
         })
 
+        sheet.addView(TextView(this).apply {
+            text="Discussion"; textSize=17f; setTextColor(Color.rgb(17,24,39)); setTypeface(null,android.graphics.Typeface.BOLD)
+            setPadding(0,dp(12),0,dp(6))
+        })
+        val comments=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        val commentsScroll=ScrollView(this).apply { isFillViewport=true; addView(comments) }
+        sheet.addView(commentsScroll,LinearLayout.LayoutParams(-1,0,1f))
+
+        fun loadComments() {
+            runDb({ db.photoComments(report.id) }) { items ->
+                comments.removeAllViews()
+                if(items.isEmpty()) comments.addView(TextView(this).apply {
+                    text="No comments yet. Start the discussion."; textSize=14f; setTextColor(Color.rgb(107,114,128))
+                    setPadding(0,dp(8),0,dp(12))
+                })
+                items.forEach { item ->
+                    val entry=LinearLayout(this).apply {
+                        orientation=LinearLayout.VERTICAL; setPadding(dp(12),dp(10),dp(12),dp(10))
+                        background=rounded(Color.rgb(249,250,251),14,Color.rgb(229,231,235))
+                    }
+                    entry.addView(TextView(this).apply {
+                        val posted=SimpleDateFormat("MMM d · h:mm a",Locale.getDefault()).format(Date(item.createdAt))
+                        text="${if(item.anonymous) "Anonymous" else "WalkIt user"}  ·  $posted"
+                        textSize=12f; setTextColor(Color.rgb(107,114,128))
+                    })
+                    if(item.text.isNotBlank()) entry.addView(TextView(this).apply {
+                        text=item.text; textSize=14f; setTextColor(Color.rgb(31,41,55)); setPadding(0,dp(4),0,0)
+                    })
+                    item.attachmentPath?.takeIf { File(it).exists() }?.let { path ->
+                        entry.addView(ImageView(this).apply {
+                            setImageBitmap(loadPhotoPreview(path,dp(320))); scaleType=ImageView.ScaleType.CENTER_CROP
+                            clipToOutline=true; background=rounded(Color.rgb(229,231,235),12)
+                        },LinearLayout.LayoutParams(-1,dp(120)).apply { topMargin=dp(8) })
+                    }
+                    comments.addView(entry,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(8) })
+                }
+            }
+        }
+        loadComments()
+
+        val commentInput=EditText(this).apply {
+            hint="Add to the discussion…"; textSize=14f; minLines=2; maxLines=3; gravity=Gravity.TOP
+            setPadding(dp(12),dp(10),dp(12),dp(10)); background=rounded(Color.rgb(249,250,251),14,Color.rgb(229,231,235))
+            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+        sheet.addView(commentInput,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(8) })
+        val composer=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        val anonymous=Switch(this).apply { text="Anonymous"; textSize=12f; setTextColor(Color.rgb(75,85,99)) }
+        val attach=TextView(this).apply {
+            text="＋ Photo"; textSize=13f; gravity=Gravity.CENTER; setTextColor(Color.rgb(37,99,235))
+            setPadding(dp(8),dp(10),dp(8),dp(10)); setOnClickListener { discussionPhotoPicker.launch("image/*") }
+        }
+        val preview=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; clipToOutline=true; background=rounded(Color.rgb(229,231,235),8) }
+        discussionPhotoPreview=preview
+        composer.addView(anonymous,LinearLayout.LayoutParams(0,dp(44),1f))
+        composer.addView(attach,LinearLayout.LayoutParams(-2,dp(44)))
+        composer.addView(preview,LinearLayout.LayoutParams(dp(40),dp(40)).apply { leftMargin=dp(4); rightMargin=dp(6) })
+        val post=TextView(this).apply {
+            text="Post"; textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.WHITE); setTypeface(null,android.graphics.Typeface.BOLD)
+            background=rounded(Color.rgb(37,99,235),12); setPadding(dp(16),dp(10),dp(16),dp(10))
+        }
+        composer.addView(post)
+        sheet.addView(composer)
+
         val dialog=Dialog(this)
+        photoDialog=dialog
+        selectedDiscussionPhoto=null
+        discussionPhotoPreview=preview
+        post.setOnClickListener {
+            val owner=userId ?: return@setOnClickListener
+            if(commentInput.text.toString().isBlank() && selectedDiscussionPhoto==null) {
+                commentInput.error="Write a comment or attach a photo"
+                return@setOnClickListener
+            }
+            post.isEnabled=false
+            runDb({ db.addPhotoComment(report.id,owner,commentInput.text.toString(),anonymous.isChecked,selectedDiscussionPhoto) }) {
+                commentInput.setText("")
+                selectedDiscussionPhoto=null
+                preview.setImageDrawable(null)
+                post.isEnabled=true
+                loadComments()
+            }
+        }
         dialog.setContentView(sheet)
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout(-1,-2)
+            setLayout(-1,(resources.displayMetrics.heightPixels*0.88f).toInt())
             setGravity(Gravity.BOTTOM)
             addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
             attributes=attributes.apply { dimAmount=0.42f }
         }
+        dialog.setOnDismissListener { if(photoDialog===dialog) photoDialog=null; discussionPhotoPreview=null; selectedDiscussionPhoto=null }
         dialog.show()
-        dialog.window?.setLayout(-1,-2)
+        dialog.window?.setLayout(-1,(resources.displayMetrics.heightPixels*0.88f).toInt())
     }
 
     private fun loadPhotoPreview(path: String,size: Int): Bitmap? = try {
@@ -590,6 +892,25 @@ class MainActivity : ComponentActivity() {
         return bitmap
     }
 
+    private fun makeMapPinIcon(): Bitmap {
+        val width=dp(42); val height=dp(54)
+        val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
+        val canvas=Canvas(bitmap)
+        val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(239,68,68); style=Paint.Style.FILL }
+        val path=Path().apply {
+            moveTo(width/2f,height.toFloat())
+            cubicTo(width*0.36f,height*0.76f,width*0.10f,height*0.48f,width*0.10f,height*0.32f)
+            cubicTo(width*0.10f,height*0.10f,width*0.30f,0f,width/2f,0f)
+            cubicTo(width*0.70f,0f,width*0.90f,height*0.10f,width*0.90f,height*0.32f)
+            cubicTo(width*0.90f,height*0.48f,width*0.64f,height*0.76f,width/2f,height.toFloat())
+            close()
+        }
+        canvas.drawPath(path,paint)
+        paint.color=Color.WHITE
+        canvas.drawCircle(width/2f,height*0.30f,dp(7).toFloat(),paint)
+        return bitmap
+    }
+
     private fun makePhotoBubble(path: String): Bitmap? = try {
         val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
         BitmapFactory.decodeFile(path,bounds)
@@ -621,6 +942,9 @@ class MainActivity : ComponentActivity() {
 
     private fun disposeMap() {
         currentStyleReady=false; currentMap=null
+        userLocationMarker=null; photoMarkerDetails.clear()
+        routeLine=null; routeMarkers.clear(); routePanelView=null
+        routeOriginField=null; routeDestinationField=null
         mapView?.onPause(); mapView?.onStop(); mapView?.onDestroy(); mapView=null
     }
     override fun onStart() { super.onStart(); mapView?.onStart() }

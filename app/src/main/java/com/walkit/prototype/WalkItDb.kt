@@ -13,8 +13,9 @@ data class Hazard(val id: Long, val ownerId: Long, val owner: String, val segmen
                   val severity: Int, val details: String, val status: String)
 data class Route(val name: String, val meters: Int, val hazards: Int, val barriers: Int)
 data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>)
+data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long)
 
-class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 2) {
+class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 3) {
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -30,6 +31,7 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
         db.execSQL("CREATE TABLE saved_routes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, route_id INTEGER NOT NULL REFERENCES walking_routes(id), PRIMARY KEY(user_id,route_id))")
         db.execSQL("CREATE TABLE user_preferences (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, route_preference TEXT NOT NULL)")
         createPhotoTables(db)
+        createPhotoDiscussionTable(db)
         listOf("North Walk", "Library Path", "Garden Lane", "South Walk").forEach { name ->
             db.execSQL("INSERT INTO pathway_segments(name) VALUES (?)", arrayOf(name))
         }
@@ -39,11 +41,32 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createPhotoTables(db)
+        if (oldVersion < 3) createPhotoDiscussionTable(db)
     }
 
     private fun createPhotoTables(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS photo_reports (id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, description TEXT NOT NULL, captured_time TEXT NOT NULL, location TEXT NOT NULL, created_at INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS photo_items (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, local_path TEXT NOT NULL)")
+    }
+
+    private fun createPhotoDiscussionTable(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS photo_comments (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, anonymous INTEGER NOT NULL DEFAULT 0, attachment_path TEXT, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS photo_comments_report ON photo_comments(report_id,created_at)")
+    }
+
+    fun addPhotoComment(reportId: Long, ownerId: Long, body: String, anonymous: Boolean, attachmentPath: String?) {
+        require(body.trim().isNotEmpty() || attachmentPath != null) { "Write a comment or attach a photo." }
+        writableDatabase.insertOrThrow("photo_comments",null,ContentValues().apply {
+            put("report_id",reportId); put("owner_id",ownerId); put("body",body.trim())
+            put("anonymous",if(anonymous) 1 else 0); put("attachment_path",attachmentPath)
+            put("created_at",System.currentTimeMillis())
+        })
+    }
+
+    fun photoComments(reportId: Long): List<PhotoComment> = buildList {
+        readableDatabase.rawQuery("SELECT id,report_id,body,anonymous,attachment_path,created_at FROM photo_comments WHERE report_id=? ORDER BY created_at",arrayOf(reportId.toString())).use { c ->
+            while(c.moveToNext()) add(PhotoComment(c.getLong(0),c.getLong(1),c.getString(2),c.getInt(3)==1,c.getString(4),c.getLong(5)))
+        }
     }
 
     fun savePhotoReport(ownerId: Long, description: String, time: String, location: String, photoPaths: List<String>): Long {
