@@ -1,0 +1,21 @@
+WalkIt - Current Features
+
+WalkIt is an Android prototype for mapping photo reports and planning routes in the Philippines.
+
+• Opens to an interactive street map focused on the Philippines, with roads and map labels.
+• Includes a current-location control that can show the user's position after location permission is granted.
+• Provides an in-app camera with Single and Batch capture, plus gallery photo selection.
+• After capture, lets the user pan and zoom beneath a fixed center pin to choose where the report belongs.
+• Saves a report with photos, description, time, and selected map coordinates.
+• Displays reports as circular photo markers. Tapping a marker opens its photos and a discussion panel.
+• Discussion comments can be posted anonymously and may include a photo attachment.
+• Has a top-right Point A to Point B route planner that accepts map coordinates and requests a route from BRouter. Route calculation requires internet access.
+• Includes Map, Forums, and Profile tabs. Forums and Profile are currently empty placeholders.
+
+Storage and sharing
+
+Reports, photos, and comments are stored locally on the device. They are not synchronized with other users or devices because a shared backend and cloud media storage have not been connected.
+
+Build artifact
+
+The repository includes a debug APK at artifacts/WalkIt-debug.apk. This is a development build of the prototype.
