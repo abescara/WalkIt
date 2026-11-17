@@ -17,7 +17,13 @@ import android.location.LocationManager
 import android.content.pm.PackageManager
 import android.view.Gravity
 import android.view.View
+import android.view.MotionEvent
 import android.widget.*
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.ImageCapture
@@ -57,6 +63,14 @@ class MainActivity : ComponentActivity() {
     private val capturedPhotos = mutableListOf<String>()
     private val photoDir by lazy { File(filesDir, "walkit-photos").apply { mkdirs() } }
     private var photoDialog: Dialog? = null
+    private var currentWebView: WebView? = null
+    private var currentWebScreen: String? = null
+    private var returnToReportAfterPicker = false
+    private var darkThemeEnabled = false
+    private var lastSubmittedPhotos = emptyList<String>()
+    private var lastSubmittedDescription = ""
+    private var lastSubmittedLocation = ""
+    private var forwardingMapGesture = false
     private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if(uris.isNotEmpty()) worker.execute {
             val imported=uris.mapNotNull { uri ->
@@ -66,7 +80,11 @@ class MainActivity : ComponentActivity() {
                     file.absolutePath.takeIf { file.exists() && file.length()>0 }
                 } catch (_: Exception) { null }
             }
-            runOnUiThread { capturedPhotos.addAll(imported); showPhotoLocationPicker() }
+            runOnUiThread {
+                capturedPhotos.addAll(imported)
+                if(currentWebScreen=="Report") currentWebView?.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
+                else showPhotoLocationPicker()
+            }
         }
     }
     private var selectedDiscussionPhoto: String? = null
@@ -102,12 +120,13 @@ class MainActivity : ComponentActivity() {
     private var routeLine: Polyline? = null
     private val routeMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
 
-    private enum class Tab { MAP, FORUMS, PROFILE }
+    private enum class Tab { MAP, COMMUNITY, FORUMS, ROUTES, REWARDS, PROFILE }
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = WalkItDb(this)
+        darkThemeEnabled=getSharedPreferences("walkit-ui",MODE_PRIVATE).getBoolean("dark_theme",false)
         MapLibre.getInstance(this)
         window.statusBarColor = Color.rgb(248, 250, 252)
         window.navigationBarColor = Color.WHITE
@@ -132,29 +151,227 @@ class MainActivity : ComponentActivity() {
             currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
             disposeMap()
         }
+        clearFrontendView()
         screen.removeAllViews()
         when (tab) {
             Tab.MAP -> showMapScreen()
-            Tab.FORUMS -> showEmptyScreen("Forums")
-            Tab.PROFILE -> showEmptyScreen("Profile")
+            Tab.COMMUNITY, Tab.FORUMS -> showWebScreen("Community")
+            Tab.ROUTES -> showWebScreen("Routes")
+            Tab.REWARDS -> showWebScreen("Rewards")
+            Tab.PROFILE -> showWebScreen("Profile")
         }
     }
 
     private fun showEmptyScreen(title: String) {
-        screen.setBackgroundColor(Color.rgb(248,250,252))
-        val message=TextView(this).apply {
-            text=title; textSize=24f; setTextColor(Color.rgb(31,41,55)); gravity=Gravity.CENTER
+        showWebScreen(when(title.lowercase()) { "forums", "community" -> "Community"; "routes" -> "Routes"; "rewards" -> "Rewards"; else -> "Profile" })
+    }
+
+    private fun showWebScreen(page: String) {
+        if(currentMap!=null) {
+            currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+            disposeMap()
         }
-        screen.addView(message,FrameLayout.LayoutParams(-1,-1))
-        addBottomNavigation()
+        clearFrontendView()
+        screen.removeAllViews()
+        pickingPhotoLocation=false
+        selectedTab=when(page) {
+            "Community", "Friends" -> Tab.COMMUNITY
+            "Routes" -> Tab.ROUTES
+            "Rewards", "Leaderboard", "Leaderboard_Nationwide" -> Tab.REWARDS
+            "Profile", "Edit_Profile", "Notifications" -> Tab.PROFILE
+            else -> Tab.MAP
+        }
+        screen.setBackgroundColor(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
+        val web=makeFrontendWebView(page)
+        screen.addView(web,FrameLayout.LayoutParams(-1,-1))
+    }
+
+    private fun makeFrontendWebView(page: String): WebView {
+        val darkPage="${page}_Dark"
+        val assetPage=if(darkThemeEnabled && assetExists("walkit/screens/$darkPage.html")) darkPage else page
+        val web=WebView(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            isVerticalScrollBarEnabled=false
+            isHorizontalScrollBarEnabled=false
+            settings.javaScriptEnabled=true
+            settings.domStorageEnabled=true
+            settings.allowFileAccess=true
+            settings.allowContentAccess=false
+            settings.allowFileAccessFromFileURLs=true
+            settings.allowUniversalAccessFromFileURLs=false
+            settings.javaScriptCanOpenWindowsAutomatically=false
+            settings.mixedContentMode=android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            webChromeClient=WebChromeClient()
+            addJavascriptInterface(FrontendBridge(),"WalkIt")
+            webViewClient=object: WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView,request: WebResourceRequest): Boolean {
+                    return !request.url.toString().startsWith("file:///android_asset/walkit/")
+                }
+                override fun onPageFinished(view: WebView,url: String) {
+                    if(currentWebView===view) {
+                        view.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
+                        view.evaluateJavascript("window.walkItRefreshPreview && window.walkItRefreshPreview()",null)
+                    }
+                }
+            }
+        }
+        currentWebView=web
+        currentWebScreen=page
+        web.loadUrl("file:///android_asset/walkit/screens/$assetPage.html")
+        return web
+    }
+
+    private fun assetExists(path: String): Boolean = try { assets.open(path).use { true } } catch (_: Exception) { false }
+
+    private fun clearFrontendView() {
+        currentWebView?.apply {
+            stopLoading()
+            (parent as? android.view.ViewGroup)?.removeView(this)
+            removeJavascriptInterface("WalkIt")
+            destroy()
+        }
+        currentWebView=null
+        currentWebScreen=null
+    }
+
+    private fun forwardMapGesture(web: WebView,map: MapView,event: MotionEvent): Boolean {
+        if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+            val scale=minOf(web.width/390f,web.height/844f)
+            val verticalOffset=(web.height-844f*scale)/2f
+            val designY=(event.y-verticalOffset)/scale
+            forwardingMapGesture=designY in 158f..738f
+        }
+        if(!forwardingMapGesture) return false
+        val copy=MotionEvent.obtain(event)
+        map.dispatchTouchEvent(copy)
+        copy.recycle()
+        if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL) forwardingMapGesture=false
+        return true
+    }
+
+    inner class FrontendBridge {
+        @JavascriptInterface fun navigate(destination: String) = runOnUiThread {
+            when(destination.lowercase()) {
+                "map", "main" -> {
+                    if(currentWebScreen=="Report") discardReportDraft()
+                    showTab(Tab.MAP)
+                }
+                "community", "forums" -> showWebScreen("Community")
+                "routes" -> showWebScreen("Routes")
+                "rewards" -> showWebScreen("Rewards")
+                "profile" -> showWebScreen("Profile")
+                "friends" -> showWebScreen("Friends")
+                "notifications" -> showWebScreen("Notifications")
+                "edit_profile" -> showWebScreen("Edit_Profile")
+                "leaderboard" -> showWebScreen("Leaderboard")
+                "leaderboard_nationwide" -> showWebScreen("Leaderboard_Nationwide")
+            }
+        }
+        @JavascriptInterface fun openCamera() = runOnUiThread { requestCamera() }
+        @JavascriptInterface fun addReportPhotos() = runOnUiThread { photoPicker.launch(arrayOf("image/*")) }
+        @JavascriptInterface fun changeReportLocation() = runOnUiThread {
+            returnToReportAfterPicker=true
+            showPhotoLocationPicker()
+        }
+        @JavascriptInterface fun openRoutePlanner() = runOnUiThread {
+            routePlannerVisible=true
+            showTab(Tab.MAP)
+        }
+        @JavascriptInterface fun searchLocation() = runOnUiThread { showCoordinateSearch() }
+        @JavascriptInterface fun showMessage(message: String) = runOnUiThread { toast(message) }
+        @JavascriptInterface fun setDarkMode(enabled: Boolean) = runOnUiThread {
+            darkThemeEnabled=enabled
+            getSharedPreferences("walkit-ui",MODE_PRIVATE).edit().putBoolean("dark_theme",enabled).apply()
+            currentWebScreen?.let { page ->
+                if(page=="Main" && currentMap!=null) {
+                    val newPage=if(enabled && assetExists("walkit/screens/Main_Dark.html")) "Main_Dark" else "Main"
+                    currentWebView?.loadUrl("file:///android_asset/walkit/screens/$newPage.html")
+                } else showWebScreen(page)
+            }
+        }
+        @JavascriptInterface fun getDraftPhotos(): String = org.json.JSONArray(capturedPhotos).toString()
+        @JavascriptInterface fun getSubmittedPhotos(): String = org.json.JSONArray(lastSubmittedPhotos).toString()
+        @JavascriptInterface fun getDraftCoordinates(): String = formatCoordinate(mapTarget)
+        @JavascriptInterface fun getSubmittedDescription(): String = lastSubmittedDescription
+        @JavascriptInterface fun getSubmittedLocation(): String = lastSubmittedLocation
+        @JavascriptInterface fun submitReport(category: String,details: String) = runOnUiThread {
+            if(details.isBlank() || capturedPhotos.isEmpty()) { toast("Add a photo and short description first."); return@runOnUiThread }
+            val owner=userId ?: return@runOnUiThread
+            val target=mapTarget
+            val location=formatCoordinate(target)
+            val description="$category · ${details.trim()}"
+            val time=SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(Date())
+            val paths=capturedPhotos.toList()
+            runDb({ db.savePhotoReport(owner,description,time,location,paths) }) {
+                lastSubmittedPhotos=paths
+                lastSubmittedDescription=description
+                lastSubmittedLocation=location
+                capturedPhotos.clear()
+                showWebScreen("Report_Preview")
+            }
+        }
+    }
+
+    private fun showCoordinateSearch() {
+        val field=EditText(this).apply {
+            hint="Latitude, longitude (Philippines)"
+            setSingleLine(true)
+            setText(formatCoordinate(currentMap?.cameraPosition?.target ?: mapTarget))
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Find a map location")
+            .setView(field)
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Go") { _,_ ->
+                val values=field.text.toString().split(",").map { it.trim().toDoubleOrNull() }
+                val lat=values.getOrNull(0); val lon=values.getOrNull(1)
+                if(lat==null || lon==null || lat !in 4.0..21.8 || lon !in 116.0..127.0) toast("Enter a valid Philippines coordinate.")
+                else {
+                    val point=LatLng(lat,lon)
+                    mapTarget=point; mapZoom=16.0
+                    currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+                }
+            }.show()
+    }
+
+    private fun discardReportDraft() {
+        currentWebView?.evaluateJavascript("window.walkItClearDraft && window.walkItClearDraft()",null)
+        capturedPhotos.clear()
+    }
+
+    @Deprecated("Use the app's in-screen navigation")
+    override fun onBackPressed() {
+        when {
+            pickingPhotoLocation -> {
+                if(returnToReportAfterPicker) {
+                    returnToReportAfterPicker=false
+                    pickingPhotoLocation=false
+                    showWebScreen("Report")
+                } else {
+                    capturedPhotos.clear()
+                    pickingPhotoLocation=false
+                    showTab(Tab.MAP)
+                }
+            }
+            currentWebScreen=="Friends" || currentWebScreen=="Notifications" -> showWebScreen("Community")
+            currentWebScreen=="Edit_Profile" -> showWebScreen("Profile")
+            currentWebScreen=="Leaderboard" || currentWebScreen=="Leaderboard_Nationwide" -> showWebScreen("Rewards")
+            currentWebScreen=="Report_Preview" -> showTab(Tab.MAP)
+            currentWebScreen!=null && currentWebScreen!="Main" -> {
+                if(currentWebScreen=="Report") discardReportDraft()
+                showTab(Tab.MAP)
+            }
+            else -> super.onBackPressed()
+        }
     }
 
     private fun showPhotoLocationPicker() {
         currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
-        if(lastUserLocation!=null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
+        if(!returnToReportAfterPicker && lastUserLocation!=null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
         pickingPhotoLocation=true
         routePlannerVisible=false
         disposeMap()
+        clearFrontendView()
         screen.removeAllViews()
         selectedTab=Tab.MAP
         showMapScreen(photoLocationPicking=true)
@@ -167,8 +384,8 @@ class MainActivity : ComponentActivity() {
             return
         }
         pickingPhotoLocation=false
-        showTab(Tab.MAP)
-        showPhotoForm()
+        if(returnToReportAfterPicker) returnToReportAfterPicker=false
+        showWebScreen("Report")
     }
 
     private fun showMapScreen(photoLocationPicking: Boolean = false) {
@@ -177,28 +394,15 @@ class MainActivity : ComponentActivity() {
         mapView=map
         screen.addView(map,FrameLayout.LayoutParams(-1,-1))
 
-        val camera=ImageView(this).apply {
-            setImageBitmap(makeCameraIcon())
-            contentDescription="Add photo report"
-            scaleType=ImageView.ScaleType.CENTER
-            background=rounded(Color.rgb(37,99,235),60)
-            elevation=10f; setOnClickListener { requestCamera() }
-        }
-        if(!photoLocationPicking) {
-            val cameraParams=FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(86) }
-            screen.addView(camera,cameraParams)
-        }
-
-        val locate=TextView(this).apply {
-            text="◎"; textSize=30f; gravity=Gravity.CENTER; contentDescription="Show my location"
-            setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
-            elevation=8f; setOnClickListener { showMyLocation() }
-        }
-        screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.TOP).apply {
-            rightMargin=dp(18); topMargin=dp(26)
-        })
-
         if(photoLocationPicking) {
+            val locate=TextView(this).apply {
+                text="◎"; textSize=30f; gravity=Gravity.CENTER; contentDescription="Show my location"
+                setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
+                elevation=8f; setOnClickListener { showMyLocation() }
+            }
+            screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.TOP).apply {
+                rightMargin=dp(18); topMargin=dp(26)
+            })
             val centerPin=ImageView(this).apply {
                 setImageBitmap(makeMapPinIcon()); contentDescription="Selected photo location"
                 elevation=12f; translationY=-dp(27).toFloat()
@@ -216,7 +420,16 @@ class MainActivity : ComponentActivity() {
             }
             val cancel=TextView(this).apply {
                 text="Cancel"; textSize=15f; gravity=Gravity.CENTER; setTextColor(Color.rgb(75,85,99))
-                setOnClickListener { capturedPhotos.clear(); pickingPhotoLocation=false; showTab(Tab.MAP) }
+                setOnClickListener {
+                    pickingPhotoLocation=false
+                    if(returnToReportAfterPicker) {
+                        returnToReportAfterPicker=false
+                        showWebScreen("Report")
+                    } else {
+                        capturedPhotos.clear()
+                        showTab(Tab.MAP)
+                    }
+                }
             }
             val confirm=TextView(this).apply {
                 text="Use this location"; textSize=15f; gravity=Gravity.CENTER
@@ -227,24 +440,38 @@ class MainActivity : ComponentActivity() {
             actions.addView(confirm,LinearLayout.LayoutParams(0,dp(48),2f))
             screen.addView(actions,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM).apply { setMargins(dp(18),0,dp(18),dp(22)) })
         } else {
+            val web=makeFrontendWebView("Main")
+            web.setBackgroundColor(Color.TRANSPARENT)
+            web.setOnTouchListener { _, event -> forwardMapGesture(web,map,event) }
+            screen.addView(web,FrameLayout.LayoutParams(-1,-1))
+
+            val locate=TextView(this).apply {
+                text="◎"; textSize=30f; gravity=Gravity.CENTER; contentDescription="Show my location"
+                setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
+                elevation=12f; setOnClickListener { showMyLocation() }
+            }
+            screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
+                rightMargin=dp(18); bottomMargin=dp(96)
+            })
             val routeToggle=TextView(this).apply {
                 text="⇄"; textSize=26f; gravity=Gravity.CENTER; contentDescription="Open route planner"
                 setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,28,0x22000000); elevation=8f
                 setOnClickListener { routePlannerVisible=!routePlannerVisible; showRoutePlannerPanel() }
             }
             screen.addView(routeToggle,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.END).apply {
-                rightMargin=dp(18); topMargin=dp(92)
+                rightMargin=dp(18); topMargin=dp(166)
             })
             if(routePlannerVisible) showRoutePlannerPanel()
-            addBottomNavigation()
         }
 
         map.onCreate(null)
         map.onStart()
         map.onResume()
         map.getMapAsync { maplibreMap ->
+            if(mapView!==map) return@getMapAsync
             currentMap=maplibreMap
             maplibreMap.setStyle("https://styles.maptoolkit.org/street.json") {
+                if(mapView!==map) return@setStyle
                 currentStyleReady=true
                 maplibreMap.uiSettings.isCompassEnabled=false
                 maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
@@ -425,7 +652,7 @@ class MainActivity : ComponentActivity() {
     private fun showCameraScreen() {
         captureInProgress=false
         currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
-        disposeMap(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
+        disposeMap(); clearFrontendView(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
         window.statusBarColor=Color.BLACK; window.navigationBarColor=Color.BLACK
         window.decorView.systemUiVisibility=0
         val preview=PreviewView(this).apply { scaleType=PreviewView.ScaleType.FILL_CENTER }

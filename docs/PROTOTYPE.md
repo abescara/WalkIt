@@ -11,6 +11,8 @@
 - Create and list shared hazard reports tied to sample pathway segments. The signed-in owner may mark their own reports resolved or delete them after confirmation. Ownership is checked in SQL updates and deletes.
 - View two predefined sample routes with distance, active report counts, and active accessibility barrier counts. The screen warns that zero recorded hazards does not prove safety.
 - Open an interactive MapLibre street map constrained to the Philippines, with visible roads and labels. The map has a current-location control and no hard-coded route overlays. The compass and prototype map label are hidden.
+- Package the supplied HTML screens and image assets under `app/src/main/assets/walkit`. The map screen uses the HTML shell over the native MapLibre map; clear map areas forward gestures to the native map. Community, Routes, Rewards, Profile, and report preview screens load locally in a WebView. The guest/no-login launch remains unchanged.
+- Wire the map camera button to CameraX; connect report categories, description, photos, center-pin location selection, and local SQLite submission to the report screens. Web screen buttons provide in-app navigation. The dark/light controls switch between the included screen variants.
 - Open the expandable point-to-point route planner from a top-right control. It accepts coordinates for Points A and B, can use the current location for A or the map center for either point, and requests a route from BRouter using its hiking profile. An internet connection is required; route output depends on the public service and available OpenStreetMap coverage.
 - Show OpenStreetMap contributor attribution. The map style and tiles load from the internet; accounts and reports stay in local SQLite.
 - Database work runs on a background executor.
@@ -22,7 +24,9 @@
 - Full route preference sorting, production reference data, field observation date entry, and migrations.
 - Replacing illustrative map coordinates with instructor-approved segment coordinates and connecting stored reports to map pins.
 - Adding a backend/cloud storage flow if cross-device photo and discussion sharing is required; current reports, photos, and comments are local to the installation.
-- Account registration, login, and profile management if they are restored for a later release.
+- Backend-driven community posts, friend actions, profile storage, reward totals, and notifications; current HTML samples are static prototype content.
+- Full place-name search, production route preferences, and accessibility-aware detours; the existing route planner uses numeric coordinates and an online routing service.
+- Account registration and login if they are restored for a later release.
 - Accessibility review, device tests, the proposal's 12 test cases, defect log, and usability improvements.
 
 ## Build verification

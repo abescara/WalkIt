@@ -1,8 +1,8 @@
 WalkIt - Current Features
 
-WalkIt is an Android prototype for mapping photo reports and planning routes in the Philippines.
+WalkIt is an Android prototype with a hybrid HTML/native frontend for mapping photo reports and planning routes in the Philippines.
 
-• Opens to an interactive street map focused on the Philippines, with roads and map labels.
+• Opens directly to an interactive MapLibre street map focused on the Philippines, with roads and map labels, framed by the supplied mobile screen design.
 • Includes a current-location control that can show the user's position after location permission is granted.
 • Provides an in-app camera with Single and Batch capture, plus gallery photo selection.
 • After capture, lets the user pan and zoom beneath a fixed center pin to choose where the report belongs.
@@ -10,7 +10,7 @@ WalkIt is an Android prototype for mapping photo reports and planning routes in 
 • Displays reports as circular photo markers. Tapping a marker opens its photos and a discussion panel.
 • Discussion comments can be posted anonymously and may include a photo attachment.
 • Has a top-right Point A to Point B route planner that accepts map coordinates and requests a route from BRouter. Route calculation requires internet access.
-• Includes Map, Forums, and Profile tabs. Forums and Profile are currently empty placeholders.
+• Includes packaged Community, Routes, Rewards, Notifications, Profile, and report screens. The community feed, profile data, and reward totals are still prototype content; there is no login gate.
 
 Storage and sharing
 
