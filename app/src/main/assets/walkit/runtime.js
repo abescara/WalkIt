@@ -114,6 +114,31 @@
 
     if (button.id === "add-report-photo") { if (bridge) bridge.addReportPhotos(); return; }
 
+    if (screenName === "Camera") {
+      const action = (button.getAttribute("aria-label") || "").toLowerCase();
+      if (action === "close camera") { if (bridge) bridge.closeCamera(); return; }
+      if (action === "take photo") { if (bridge) bridge.captureCameraPhoto(); return; }
+      if (action === "open gallery") { if (bridge) bridge.openCameraGallery(); return; }
+      if (action === "flip camera") { if (bridge) bridge.flipCamera(); return; }
+      if (action === "flash") { if (bridge) bridge.toggleCameraFlash(); return; }
+      if (action === "done taking photos") { if (bridge) bridge.finishCamera(); return; }
+      if (action === "single photo mode" || action === "batch photo mode") {
+        const buttons = Array.from(document.querySelectorAll('[aria-label="Single photo mode"],[aria-label="Batch photo mode"]'));
+        const batch = action === "batch photo mode";
+        buttons.forEach((item) => {
+          const active = item === button;
+          item.style.background = active ? "#fff" : "transparent";
+          item.style.color = active ? "#111" : "#fff";
+          item.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        if (bridge) {
+          bridge.setCameraBatchMode(batch);
+          window.walkItUpdateCameraState(bridge.getCameraPhotoCount(),batch);
+        }
+        return;
+      }
+    }
+
     if (["map", "community", "routes", "rewards"].includes(lower)) {
       if(screenName==="Report" && lower==="map") clearDraft();
       if (bridge) bridge.navigate(lower);
@@ -172,7 +197,23 @@
   window.walkItRefreshDraft = hydrateReport;
   window.walkItRefreshPreview = hydratePreview;
   window.walkItClearDraft = clearDraft;
+  window.walkItSetFlash = function(enabled) {
+    const flash = document.querySelector('[aria-label="Flash"]');
+    if (flash) flash.style.background = enabled ? "#facc15" : "#0009";
+  };
+  window.walkItUpdateCameraState = function(count,batch) {
+    const done = document.getElementById("camera-done");
+    if (done) { done.textContent = `Done ${count}`; done.style.display = batch && count > 0 ? "block" : "none"; }
+    const modes = [document.querySelector('[aria-label="Single photo mode"]'),document.querySelector('[aria-label="Batch photo mode"]')];
+    modes.forEach((button,index) => {
+      if (!button) return;
+      const active = (index === 1) === batch;
+      button.style.background = active ? "#fff" : "transparent";
+      button.style.color = active ? "#111" : "#fff";
+    });
+  };
   sizeToDevice();
   hydrateReport();
   hydratePreview();
+  if (screenName === "Camera" && bridge) window.walkItUpdateCameraState(bridge.getCameraPhotoCount(),bridge.isCameraBatchMode());
 })();

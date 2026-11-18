@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 capturedPhotos.addAll(imported)
                 if(currentWebScreen=="Report") currentWebView?.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
+                else if(currentWebScreen=="Camera") finishCamera(true)
                 else showPhotoLocationPicker()
             }
         }
@@ -104,6 +105,10 @@ class MainActivity : ComponentActivity() {
     }
     private var cameraController: LifecycleCameraController? = null
     private var cameraModeBatch = false
+    private var cameraUsesFrontLens = false
+    private var cameraFlashEnabled = false
+    private var cameraUiDone: TextView? = null
+    private var cameraUiShutter: View? = null
     private var captureInProgress = false
     private var locationManager: LocationManager? = null
     private var pendingLocationListener: LocationListener? = null
@@ -268,6 +273,33 @@ class MainActivity : ComponentActivity() {
             }
         }
         @JavascriptInterface fun openCamera() = runOnUiThread { requestCamera() }
+        @JavascriptInterface fun closeCamera() = runOnUiThread { finishCamera(false) }
+        @JavascriptInterface fun captureCameraPhoto() = runOnUiThread {
+            val done=cameraUiDone; val shutter=cameraUiShutter
+            if(done!=null && shutter!=null && !captureInProgress) capturePhoto(done,shutter)
+        }
+        @JavascriptInterface fun finishCamera() = runOnUiThread { finishCamera(true) }
+        @JavascriptInterface fun openCameraGallery() = runOnUiThread { photoPicker.launch(arrayOf("image/*")) }
+        @JavascriptInterface fun setCameraBatchMode(enabled: Boolean) = runOnUiThread { cameraModeBatch=enabled }
+        @JavascriptInterface fun getCameraPhotoCount(): Int = capturedPhotos.size
+        @JavascriptInterface fun isCameraBatchMode(): Boolean = cameraModeBatch
+        @JavascriptInterface fun toggleCameraFlash() = runOnUiThread {
+            val controller=cameraController ?: return@runOnUiThread
+            cameraFlashEnabled=!cameraFlashEnabled
+            try { controller.cameraControl?.enableTorch(cameraFlashEnabled) }
+            catch (_: Exception) { cameraFlashEnabled=false; toast("Flash is not available on this camera.") }
+            currentWebView?.evaluateJavascript("window.walkItSetFlash && window.walkItSetFlash($cameraFlashEnabled)",null)
+        }
+        @JavascriptInterface fun flipCamera() = runOnUiThread {
+            val controller=cameraController ?: return@runOnUiThread
+            cameraUsesFrontLens=!cameraUsesFrontLens
+            try {
+                controller.cameraSelector=if(cameraUsesFrontLens) androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA else androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
+            } catch (_: Exception) {
+                cameraUsesFrontLens=!cameraUsesFrontLens
+                toast("Could not switch cameras on this device.")
+            }
+        }
         @JavascriptInterface fun addReportPhotos() = runOnUiThread { photoPicker.launch(arrayOf("image/*")) }
         @JavascriptInterface fun changeReportLocation() = runOnUiThread {
             returnToReportAfterPicker=true
@@ -651,6 +683,8 @@ class MainActivity : ComponentActivity() {
 
     private fun showCameraScreen() {
         captureInProgress=false
+        cameraUsesFrontLens=false
+        cameraFlashEnabled=false
         currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
         disposeMap(); clearFrontendView(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
         window.statusBarColor=Color.BLACK; window.navigationBarColor=Color.BLACK
@@ -662,39 +696,15 @@ class MainActivity : ComponentActivity() {
             bindToLifecycle(this@MainActivity)
         }
         preview.controller=controller; cameraController=controller
-
-        val close=TextView(this).apply {
-            text="×"; textSize=34f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
-            background=rounded(0x55000000,30); contentDescription="Close camera"
-            setOnClickListener { finishCamera(false) }
-        }
-        screen.addView(close,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.START).apply { setMargins(dp(18),dp(22),0,0) })
-
         val done=TextView(this).apply {
-            text="Done 0"; textSize=15f; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
-            setPadding(dp(15),dp(8),dp(15),dp(8)); background=rounded(0x55000000,30)
-            contentDescription="Done taking photos"; visibility=View.GONE
-            setOnClickListener { finishCamera(true) }
+            visibility=View.GONE
         }
-        screen.addView(done,FrameLayout.LayoutParams(-2,dp(44),Gravity.TOP or Gravity.END).apply { setMargins(0,dp(26),dp(18),0) })
-
-        val modes=LinearLayout(this).apply {
-            orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER; background=rounded(0xCC111827.toInt(),28)
-            setPadding(dp(4),dp(4),dp(4),dp(4))
-        }
-        val single=TextView(this).apply { text="Single"; gravity=Gravity.CENTER; setPadding(dp(18),dp(9),dp(18),dp(9)) }
-        val batch=TextView(this).apply { text="Batch"; gravity=Gravity.CENTER; setPadding(dp(18),dp(9),dp(18),dp(9)) }
-        single.setOnClickListener { cameraModeBatch=false; updateCameraMode(single,batch,done) }
-        batch.setOnClickListener { cameraModeBatch=true; updateCameraMode(single,batch,done) }
-        modes.addView(single); modes.addView(batch)
-        screen.addView(modes,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(132) })
-
-        val shutter=FrameLayout(this).apply { background=rounded(Color.WHITE,60); elevation=10f; contentDescription="Take photo"; isClickable=true }
-        val inner=View(this).apply { background=rounded(Color.rgb(37,99,235),60) }
-        shutter.addView(inner,FrameLayout.LayoutParams(dp(62),dp(62),Gravity.CENTER))
-        shutter.setOnClickListener { if(!captureInProgress) capturePhoto(done,shutter) }
-        screen.addView(shutter,FrameLayout.LayoutParams(dp(82),dp(82),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(32) })
-        updateCameraMode(single,batch,done)
+        val shutter=View(this).apply { visibility=View.GONE }
+        cameraUiDone=done; cameraUiShutter=shutter
+        screen.addView(done); screen.addView(shutter)
+        val cameraUi=makeFrontendWebView("Camera")
+        cameraUi.setBackgroundColor(Color.TRANSPARENT)
+        screen.addView(cameraUi,FrameLayout.LayoutParams(-1,-1))
     }
 
     private fun updateCameraMode(single: TextView,batch: TextView,done: TextView) {
@@ -724,6 +734,7 @@ class MainActivity : ComponentActivity() {
                 capturedPhotos.add(file.absolutePath)
                 if(cameraModeBatch) {
                     done.text="Done ${capturedPhotos.size}"; done.visibility=View.VISIBLE
+                    currentWebView?.evaluateJavascript("window.walkItUpdateCameraState && window.walkItUpdateCameraState(${capturedPhotos.size},true)",null)
                     toast("Photo ${capturedPhotos.size} added")
                 } else finishCamera(true)
             }
@@ -815,6 +826,8 @@ class MainActivity : ComponentActivity() {
 
     private fun finishCamera(keepPhotos: Boolean) {
         cameraController?.unbind(); cameraController=null
+        cameraUiDone=null; cameraUiShutter=null
+        cameraFlashEnabled=false; cameraUsesFrontLens=false
         window.statusBarColor=Color.rgb(248,250,252); window.navigationBarColor=Color.WHITE
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         if(keepPhotos && capturedPhotos.isNotEmpty()) showPhotoLocationPicker()
