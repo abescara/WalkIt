@@ -161,7 +161,7 @@ class MainActivity : ComponentActivity() {
         when (tab) {
             Tab.MAP -> showMapScreen()
             Tab.COMMUNITY, Tab.FORUMS -> showWebScreen("Community")
-            Tab.ROUTES -> showWebScreen("Routes")
+            Tab.ROUTES -> showMapScreen(routeMode=true)
             Tab.REWARDS -> showWebScreen("Rewards")
             Tab.PROFILE -> showWebScreen("Profile")
         }
@@ -244,7 +244,7 @@ class MainActivity : ComponentActivity() {
             val scale=minOf(web.width/390f,web.height/844f)
             val verticalOffset=(web.height-844f*scale)/2f
             val designY=(event.y-verticalOffset)/scale
-            forwardingMapGesture=designY in 158f..738f
+            forwardingMapGesture=designY in 158f..(if(currentWebScreen=="Routes") 460f else 738f)
         }
         if(!forwardingMapGesture) return false
         val copy=MotionEvent.obtain(event)
@@ -262,7 +262,7 @@ class MainActivity : ComponentActivity() {
                     showTab(Tab.MAP)
                 }
                 "community", "forums" -> showWebScreen("Community")
-                "routes" -> showWebScreen("Routes")
+                "routes" -> showTab(Tab.ROUTES)
                 "rewards" -> showWebScreen("Rewards")
                 "profile" -> showWebScreen("Profile")
                 "friends" -> showWebScreen("Friends")
@@ -309,6 +309,12 @@ class MainActivity : ComponentActivity() {
             routePlannerVisible=true
             showTab(Tab.MAP)
         }
+        @JavascriptInterface fun planRoute(origin: String,destination: String) = runOnUiThread {
+            val start=EditText(this@MainActivity).apply { setText(origin) }
+            val end=EditText(this@MainActivity).apply { setText(destination) }
+            requestWalkingRoute(start,end,TextView(this@MainActivity))
+        }
+        @JavascriptInterface fun getRouteOrigin(): String = formatCoordinate(lastUserLocation ?: mapTarget)
         @JavascriptInterface fun searchLocation() = runOnUiThread { showCoordinateSearch() }
         @JavascriptInterface fun showMessage(message: String) = runOnUiThread { toast(message) }
         @JavascriptInterface fun setDarkMode(enabled: Boolean) = runOnUiThread {
@@ -318,7 +324,8 @@ class MainActivity : ComponentActivity() {
                 if(page=="Main" && currentMap!=null) {
                     val newPage=if(enabled && assetExists("walkit/screens/Main_Dark.html")) "Main_Dark" else "Main"
                     currentWebView?.loadUrl("file:///android_asset/walkit/screens/$newPage.html")
-                } else showWebScreen(page)
+                } else if(page=="Routes") showTab(Tab.ROUTES)
+                else showWebScreen(page)
             }
         }
         @JavascriptInterface fun getDraftPhotos(): String = org.json.JSONArray(capturedPhotos).toString()
@@ -420,7 +427,7 @@ class MainActivity : ComponentActivity() {
         showWebScreen("Report")
     }
 
-    private fun showMapScreen(photoLocationPicking: Boolean = false) {
+    private fun showMapScreen(photoLocationPicking: Boolean = false, routeMode: Boolean = false) {
         screen.setBackgroundColor(Color.WHITE)
         val map=MapView(this)
         mapView=map
@@ -472,7 +479,7 @@ class MainActivity : ComponentActivity() {
             actions.addView(confirm,LinearLayout.LayoutParams(0,dp(48),2f))
             screen.addView(actions,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM).apply { setMargins(dp(18),0,dp(18),dp(22)) })
         } else {
-            val web=makeFrontendWebView("Main")
+            val web=makeFrontendWebView(if(routeMode) "Routes" else "Main")
             web.setBackgroundColor(Color.TRANSPARENT)
             web.setOnTouchListener { _, event -> forwardMapGesture(web,map,event) }
             screen.addView(web,FrameLayout.LayoutParams(-1,-1))
@@ -482,7 +489,7 @@ class MainActivity : ComponentActivity() {
                 setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
                 elevation=12f; setOnClickListener { showMyLocation() }
             }
-            screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
+            if(!routeMode) screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
                 rightMargin=dp(18); bottomMargin=dp(96)
             })
             val routeToggle=TextView(this).apply {
@@ -490,10 +497,10 @@ class MainActivity : ComponentActivity() {
                 setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,28,0x22000000); elevation=8f
                 setOnClickListener { routePlannerVisible=!routePlannerVisible; showRoutePlannerPanel() }
             }
-            screen.addView(routeToggle,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.END).apply {
+            if(!routeMode) screen.addView(routeToggle,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.END).apply {
                 rightMargin=dp(18); topMargin=dp(166)
             })
-            if(routePlannerVisible) showRoutePlannerPanel()
+            if(routePlannerVisible && !routeMode) showRoutePlannerPanel()
         }
 
         map.onCreate(null)
@@ -612,8 +619,8 @@ class MainActivity : ComponentActivity() {
         }
         val from=parse(start.text.toString())
         val to=parse(end.text.toString())
-        if(from==null) { start.error="Enter a valid Philippines coordinate"; return }
-        if(to==null) { end.error="Enter a valid Philippines coordinate"; return }
+        if(from==null) { start.error="Enter a valid Philippines coordinate"; routeError("Enter a valid starting coordinate in the Philippines"); return }
+        if(to==null) { end.error="Enter a valid Philippines coordinate"; routeError("Enter a valid destination coordinate in the Philippines"); return }
         button.isEnabled=false
         button.text="Finding…"
         worker.execute {
@@ -637,14 +644,42 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     displayRoute(points,from,to)
+                    val length=points.zipWithNext().sumOf { (a,b) ->
+                        val result=FloatArray(1)
+                        Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,result)
+                        result[0].toDouble()
+                    }
+                    val minutes=kotlin.math.max(1,(length/1.2/60).toInt())
+                    val summary="Walking route · ${minutes} min · ${"%.1f".format(Locale.US,length/1000)} km"
+                    currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},'')",null)
+                    runDb({
+                        db.photoReports().firstOrNull { report ->
+                            val parts=report.location.split(",").mapNotNull { it.trim().toDoubleOrNull() }
+                            if(parts.size!=2) false else points.any { point ->
+                                val meters=FloatArray(1)
+                                Location.distanceBetween(parts[0],parts[1],point.latitude,point.longitude,meters)
+                                meters[0]<35f
+                            }
+                        }
+                    }) { obstacle ->
+                        if(obstacle!=null && currentWebScreen=="Routes") {
+                            val warning="Possible obstacle along this route: ${obstacle.description}"
+                            currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},${JSONObject.quote(warning)})",null)
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     toast("Could not find a walking route: ${e.message ?: "try again"}")
+                    routeError("Could not find a walking route. Check your connection and coordinates.")
                 }
             }
         }
+    }
+
+    private fun routeError(message: String) {
+        currentWebView?.evaluateJavascript("window.walkItRouteError && window.walkItRouteError(${JSONObject.quote(message)})",null)
     }
 
     private fun displayRoute(points: List<LatLng>,from: LatLng,to: LatLng) {

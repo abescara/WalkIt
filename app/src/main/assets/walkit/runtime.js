@@ -158,7 +158,17 @@
     }
     if (lower === "badges") { if (bridge) bridge.navigate("rewards"); return; }
     if (lower === "post on forum") { if (bridge) bridge.navigate("community"); return; }
-    if (lower === "start detour") { if (bridge) bridge.openRoutePlanner(); return; }
+    if (lower === "find route" || lower === "start detour") {
+      const origin = document.getElementById("route-origin");
+      const destination = document.getElementById("route-destination");
+      if (!origin || !destination || !origin.value.trim() || !destination.value.trim()) {
+        if (bridge) bridge.showMessage("Enter a start and destination as latitude, longitude.");
+        return;
+      }
+      document.getElementById("route-status").textContent = "Finding a walking route…";
+      if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim());
+      return;
+    }
     if (lower === "done" || lower === "back to map" || lower === "home") { if (bridge) bridge.navigate("map"); return; }
     if (lower === "create a forum") { if (bridge) bridge.showMessage("Forum posting will be enabled when the community service is connected."); return; }
     if (lower === "save changes") { if (bridge) bridge.showMessage("Profile editing is a visual prototype in this build."); return; }
@@ -197,6 +207,16 @@
   window.walkItRefreshDraft = hydrateReport;
   window.walkItRefreshPreview = hydratePreview;
   window.walkItClearDraft = clearDraft;
+  window.walkItRouteReady = function(summary,warning) {
+    const status=document.getElementById("route-status");
+    const details=document.getElementById("route-summary");
+    if(status) status.textContent=warning || "Walking route is ready on the map";
+    if(details) details.textContent=summary;
+  };
+  window.walkItRouteError = function(message) {
+    const status=document.getElementById("route-status");
+    if(status) status.textContent=message;
+  };
   window.walkItSetFlash = function(enabled) {
     const flash = document.querySelector('[aria-label="Flash"]');
     if (flash) flash.style.background = enabled ? "#facc15" : "#0009";
@@ -215,5 +235,9 @@
   sizeToDevice();
   hydrateReport();
   hydratePreview();
+  if(screenName === "Routes" && bridge) {
+    const origin=document.getElementById("route-origin");
+    if(origin) origin.value=bridge.getRouteOrigin();
+  }
   if (screenName === "Camera" && bridge) window.walkItUpdateCameraState(bridge.getCameraPhotoCount(),bridge.isCameraBatchMode());
 })();
