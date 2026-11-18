@@ -49,6 +49,7 @@ import java.util.concurrent.Executors
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import android.location.Geocoder
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
@@ -65,6 +66,8 @@ class MainActivity : ComponentActivity() {
     private var photoDialog: Dialog? = null
     private var currentWebView: WebView? = null
     private var currentWebScreen: String? = null
+    private var transitionFrame: Bitmap? = null
+    private var transitionCover: ImageView? = null
     private var returnToReportAfterPicker = false
     private var darkThemeEnabled = false
     private var lastSubmittedPhotos = emptyList<String>()
@@ -119,6 +122,9 @@ class MainActivity : ComponentActivity() {
     private var mapZoom = 5.5
     private var pickingPhotoLocation = false
     private var routePlannerVisible = false
+    private var pickingRoutePoint: String? = null
+    private var routeStartPoint: LatLng? = null
+    private var routeEndPoint: LatLng? = null
     private var routePanelView: View? = null
     private var routeOriginField: EditText? = null
     private var routeDestinationField: EditText? = null
@@ -151,6 +157,7 @@ class MainActivity : ComponentActivity() {
     private fun toast(message: String) = Toast.makeText(this,message,Toast.LENGTH_LONG).show()
 
     private fun showTab(tab: Tab) {
+        captureTransitionFrame()
         selectedTab=tab
         if (tab!=Tab.MAP || currentMap!=null) {
             currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
@@ -165,6 +172,7 @@ class MainActivity : ComponentActivity() {
             Tab.REWARDS -> showWebScreen("Rewards")
             Tab.PROFILE -> showWebScreen("Profile")
         }
+        showTransitionFrame()
     }
 
     private fun showEmptyScreen(title: String) {
@@ -172,6 +180,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showWebScreen(page: String) {
+        captureTransitionFrame()
         if(currentMap!=null) {
             currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
             disposeMap()
@@ -189,6 +198,7 @@ class MainActivity : ComponentActivity() {
         screen.setBackgroundColor(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
         val web=makeFrontendWebView(page)
         screen.addView(web,FrameLayout.LayoutParams(-1,-1))
+        showTransitionFrame()
     }
 
     private fun makeFrontendWebView(page: String): WebView {
@@ -216,6 +226,7 @@ class MainActivity : ComponentActivity() {
                     if(currentWebView===view) {
                         view.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
                         view.evaluateJavascript("window.walkItRefreshPreview && window.walkItRefreshPreview()",null)
+                        view.postDelayed({ dismissTransitionFrame() },350)
                     }
                 }
             }
@@ -237,6 +248,37 @@ class MainActivity : ComponentActivity() {
         }
         currentWebView=null
         currentWebScreen=null
+    }
+
+    private fun captureTransitionFrame() {
+        if(transitionFrame!=null || screen.width<=0 || screen.height<=0 || screen.childCount==0) return
+        try {
+            transitionFrame=Bitmap.createBitmap(screen.width,screen.height,Bitmap.Config.RGB_565).also {
+                screen.draw(Canvas(it))
+            }
+        } catch (_: Exception) { transitionFrame=null }
+    }
+
+    private fun showTransitionFrame() {
+        if(transitionCover?.parent===screen) return
+        transitionCover=null
+        val frame=transitionFrame ?: return
+        transitionCover=ImageView(this).apply {
+            setImageBitmap(frame)
+            scaleType=ImageView.ScaleType.FIT_XY
+            isClickable=true
+        }
+        screen.addView(transitionCover,FrameLayout.LayoutParams(-1,-1))
+        screen.postDelayed({ dismissTransitionFrame() },1500)
+    }
+
+    private fun dismissTransitionFrame() {
+        val cover=transitionCover ?: return
+        cover.animate().alpha(0f).setDuration(150).withEndAction {
+            screen.removeView(cover)
+            if(transitionCover===cover) transitionCover=null
+            transitionFrame?.recycle(); transitionFrame=null
+        }.start()
     }
 
     private fun forwardMapGesture(web: WebView,map: MapView,event: MotionEvent): Boolean {
@@ -314,7 +356,16 @@ class MainActivity : ComponentActivity() {
             val end=EditText(this@MainActivity).apply { setText(destination) }
             requestWalkingRoute(start,end,TextView(this@MainActivity))
         }
-        @JavascriptInterface fun getRouteOrigin(): String = formatCoordinate(lastUserLocation ?: mapTarget)
+        @JavascriptInterface fun getRouteOrigin(): String = if(lastUserLocation!=null) "Current location" else ""
+        @JavascriptInterface fun pickRoutePoint(which: String) = runOnUiThread {
+            if(which!="start" && which!="end") return@runOnUiThread
+            pickingRoutePoint=which
+            showPhotoLocationPicker()
+        }
+        @JavascriptInterface fun getPinnedRoutePoint(which: String): String =
+            if((if(which=="start") routeStartPoint else routeEndPoint)!=null)
+                if(which=="start") "Pinned start on map" else "Pinned destination on map"
+            else ""
         @JavascriptInterface fun searchLocation() = runOnUiThread { showCoordinateSearch() }
         @JavascriptInterface fun showMessage(message: String) = runOnUiThread { toast(message) }
         @JavascriptInterface fun setDarkMode(enabled: Boolean) = runOnUiThread {
@@ -353,22 +404,25 @@ class MainActivity : ComponentActivity() {
 
     private fun showCoordinateSearch() {
         val field=EditText(this).apply {
-            hint="Latitude, longitude (Philippines)"
+            hint="Search a place or address in the Philippines"
             setSingleLine(true)
-            setText(formatCoordinate(currentMap?.cameraPosition?.target ?: mapTarget))
         }
         android.app.AlertDialog.Builder(this)
             .setTitle("Find a map location")
             .setView(field)
             .setNegativeButton("Cancel",null)
             .setPositiveButton("Go") { _,_ ->
-                val values=field.text.toString().split(",").map { it.trim().toDoubleOrNull() }
-                val lat=values.getOrNull(0); val lon=values.getOrNull(1)
-                if(lat==null || lon==null || lat !in 4.0..21.8 || lon !in 116.0..127.0) toast("Enter a valid Philippines coordinate.")
-                else {
-                    val point=LatLng(lat,lon)
-                    mapTarget=point; mapZoom=16.0
-                    currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+                val query=field.text.toString().trim()
+                if(query.isBlank()) return@setPositiveButton
+                worker.execute {
+                    val point=resolvePlace(query)
+                    runOnUiThread {
+                        if(point==null) toast("Place not found in the Philippines. Try a more specific address.")
+                        else {
+                            mapTarget=point; mapZoom=16.0
+                            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+                        }
+                    }
                 }
             }.show()
     }
@@ -382,7 +436,11 @@ class MainActivity : ComponentActivity() {
     override fun onBackPressed() {
         when {
             pickingPhotoLocation -> {
-                if(returnToReportAfterPicker) {
+                if(pickingRoutePoint!=null) {
+                    pickingRoutePoint=null
+                    pickingPhotoLocation=false
+                    showTab(Tab.ROUTES)
+                } else if(returnToReportAfterPicker) {
                     returnToReportAfterPicker=false
                     pickingPhotoLocation=false
                     showWebScreen("Report")
@@ -406,7 +464,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showPhotoLocationPicker() {
         currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
-        if(!returnToReportAfterPicker && lastUserLocation!=null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
+        if(!returnToReportAfterPicker && lastUserLocation!=null && pickingRoutePoint==null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
         pickingPhotoLocation=true
         routePlannerVisible=false
         disposeMap()
@@ -423,6 +481,12 @@ class MainActivity : ComponentActivity() {
             return
         }
         pickingPhotoLocation=false
+        pickingRoutePoint?.let { which ->
+            if(which=="start") routeStartPoint=mapTarget else routeEndPoint=mapTarget
+            pickingRoutePoint=null
+            showTab(Tab.ROUTES)
+            return
+        }
         if(returnToReportAfterPicker) returnToReportAfterPicker=false
         showWebScreen("Report")
     }
@@ -448,7 +512,7 @@ class MainActivity : ComponentActivity() {
             }
             screen.addView(centerPin,FrameLayout.LayoutParams(dp(44),dp(54),Gravity.CENTER))
             val hint=TextView(this).apply {
-                text="Move the map to choose where this photo was taken"
+                text=if(pickingRoutePoint==null) "Move the map to choose where this photo was taken" else "Move the map to choose your route ${pickingRoutePoint}"
                 textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.rgb(31,41,55))
                 setPadding(dp(16),dp(11),dp(16),dp(11)); background=rounded(Color.WHITE,28,0x22000000); elevation=8f
             }
@@ -461,7 +525,10 @@ class MainActivity : ComponentActivity() {
                 text="Cancel"; textSize=15f; gravity=Gravity.CENTER; setTextColor(Color.rgb(75,85,99))
                 setOnClickListener {
                     pickingPhotoLocation=false
-                    if(returnToReportAfterPicker) {
+                    if(pickingRoutePoint!=null) {
+                        pickingRoutePoint=null
+                        showTab(Tab.ROUTES)
+                    } else if(returnToReportAfterPicker) {
                         returnToReportAfterPicker=false
                         showWebScreen("Report")
                     } else {
@@ -492,15 +559,6 @@ class MainActivity : ComponentActivity() {
             if(!routeMode) screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
                 rightMargin=dp(18); bottomMargin=dp(96)
             })
-            val routeToggle=TextView(this).apply {
-                text="⇄"; textSize=26f; gravity=Gravity.CENTER; contentDescription="Open route planner"
-                setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,28,0x22000000); elevation=8f
-                setOnClickListener { routePlannerVisible=!routePlannerVisible; showRoutePlannerPanel() }
-            }
-            if(!routeMode) screen.addView(routeToggle,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.TOP or Gravity.END).apply {
-                rightMargin=dp(18); topMargin=dp(166)
-            })
-            if(routePlannerVisible && !routeMode) showRoutePlannerPanel()
         }
 
         map.onCreate(null)
@@ -611,20 +669,46 @@ class MainActivity : ComponentActivity() {
 
     private fun formatCoordinate(point: LatLng) = "${"%.6f".format(Locale.US,point.latitude)}, ${"%.6f".format(Locale.US,point.longitude)}"
 
-    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView) {
-        fun parse(value: String): LatLng? {
-            val pieces=value.split(",").map { it.trim().toDoubleOrNull() ?: return null }
-            if(pieces.size!=2 || pieces[0] !in 4.0..21.8 || pieces[1] !in 116.0..127.0) return null
-            return LatLng(pieces[0],pieces[1])
+    private fun resolvePlace(query: String): LatLng? {
+        val coordinates=query.split(",").map { it.trim().toDoubleOrNull() }
+        if(coordinates.size==2 && coordinates[0]!=null && coordinates[1]!=null) {
+            val lat=coordinates[0]!!; val lon=coordinates[1]!!
+            return if(lat in 4.0..21.8 && lon in 116.0..127.0) LatLng(lat,lon) else null
         }
-        val from=parse(start.text.toString())
-        val to=parse(end.text.toString())
-        if(from==null) { start.error="Enter a valid Philippines coordinate"; routeError("Enter a valid starting coordinate in the Philippines"); return }
-        if(to==null) { end.error="Enter a valid Philippines coordinate"; routeError("Enter a valid destination coordinate in the Philippines"); return }
+        try {
+            val result=Geocoder(this,Locale("en","PH")).getFromLocationName(query,1)?.firstOrNull()
+            if(result!=null && result.latitude in 4.0..21.8 && result.longitude in 116.0..127.0)
+                return LatLng(result.latitude,result.longitude)
+        } catch (_: Exception) {}
+        return try {
+            val url="https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ph&q=${URLEncoder.encode(query,"UTF-8")}" 
+            val connection=(URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout=10_000; readTimeout=15_000
+                setRequestProperty("User-Agent","WalkItPrototype/1.0 (student accessibility map)")
+            }
+            val body=try { connection.inputStream.bufferedReader().use { it.readText() } } finally { connection.disconnect() }
+            val item=org.json.JSONArray(body).optJSONObject(0) ?: return null
+            val lat=item.optString("lat").toDoubleOrNull() ?: return null
+            val lon=item.optString("lon").toDoubleOrNull() ?: return null
+            if(lat in 4.0..21.8 && lon in 116.0..127.0) LatLng(lat,lon) else null
+        } catch (_: Exception) { null }
+    }
+
+    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView) {
+        val startQuery=start.text.toString().trim()
+        val endQuery=end.text.toString().trim()
+        if(startQuery.isBlank() || endQuery.isBlank()) { routeError("Enter a start and destination address."); return }
         button.isEnabled=false
         button.text="Finding…"
         worker.execute {
             try {
+                val from=when(startQuery) {
+                    "Pinned start on map" -> routeStartPoint
+                    "Current location" -> lastUserLocation
+                    else -> resolvePlace(startQuery)
+                }
+                val to=if(endQuery=="Pinned destination on map") routeEndPoint else resolvePlace(endQuery)
+                if(from==null || to==null) error("Start or destination could not be found in the Philippines")
                 val pair="${from.longitude},${from.latitude}|${to.longitude},${to.latitude}"
                 val query=URLEncoder.encode(pair,"UTF-8")
                 val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=hiking-mountain&alternativeidx=0&format=geojson").openConnection() as HttpURLConnection).apply {

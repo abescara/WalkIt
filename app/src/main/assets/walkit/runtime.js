@@ -7,16 +7,17 @@
     const wrap = document.querySelector(".wrap");
     const canvas = wrap && wrap.firstElementChild;
     if (!wrap || !canvas) return;
-    const scale = Math.min(window.innerWidth / 390, window.innerHeight / 844);
+    const scale = window.innerWidth / 390;
     const width = 390 * scale;
-    const height = 844 * scale;
+    const height = window.innerHeight;
+    const logicalHeight = height / scale;
     document.documentElement.style.cssText = "width:100%;height:100%;overflow:hidden";
     document.body.style.cssText = "margin:0;width:100%;height:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;background:transparent";
     wrap.style.cssText = `width:${width}px;height:${height}px;margin:0;overflow:hidden;flex:none`;
     canvas.style.transform = `scale(${scale})`;
     canvas.style.transformOrigin = "top left";
     canvas.style.width = "390px";
-    canvas.style.height = "844px";
+    canvas.style.height = `${logicalHeight}px`;
   }
 
   function labelFor(button) {
@@ -111,6 +112,13 @@
     }
     const label = labelFor(button);
     const lower = label.toLowerCase();
+    if (lower === "pin route start on map" || lower === "pin route destination on map") {
+      const start=document.getElementById("route-origin");
+      const end=document.getElementById("route-destination");
+      localStorage.setItem("walkit-route-fields",JSON.stringify({start:start?.value || "",end:end?.value || ""}));
+      if (bridge) bridge.pickRoutePoint(lower.includes("start") ? "start" : "end");
+      return;
+    }
 
     if (button.id === "add-report-photo") { if (bridge) bridge.addReportPhotos(); return; }
 
@@ -198,6 +206,9 @@
   });
 
   document.addEventListener("input",function(event){
+    if(screenName==="Routes" && (event.target?.id==="route-origin" || event.target?.id==="route-destination")) {
+      localStorage.setItem("walkit-route-fields",JSON.stringify({start:document.getElementById("route-origin")?.value || "",end:document.getElementById("route-destination")?.value || ""}));
+    }
     if(screenName==="Report" && event.target && event.target.id==="report-details") {
       saveDraft({category:window.walkItCategory || "Broken sidewalk",details:event.target.value});
     }
@@ -237,7 +248,11 @@
   hydratePreview();
   if(screenName === "Routes" && bridge) {
     const origin=document.getElementById("route-origin");
-    if(origin) origin.value=bridge.getRouteOrigin();
+    const destination=document.getElementById("route-destination");
+    let saved={};
+    try { saved=JSON.parse(localStorage.getItem("walkit-route-fields") || "{}"); } catch (_) {}
+    if(origin) origin.value=bridge.getPinnedRoutePoint("start") || saved.start || bridge.getRouteOrigin();
+    if(destination) destination.value=bridge.getPinnedRoutePoint("end") || saved.end || "";
   }
   if (screenName === "Camera" && bridge) window.walkItUpdateCameraState(bridge.getCameraPhotoCount(),bridge.isCameraBatchMode());
 })();
