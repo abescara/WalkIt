@@ -322,12 +322,18 @@ class MainActivity : ComponentActivity() {
             settings.mixedContentMode=android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webChromeClient=WebChromeClient()
             addJavascriptInterface(FrontendBridge(),"WalkIt")
+            addOnLayoutChangeListener { view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom ->
+                if(right-left!=oldRight-oldLeft || bottom-top!=oldBottom-oldTop) {
+                    (view as WebView).evaluateJavascript("window.walkItResize && window.walkItResize()",null)
+                }
+            }
             webViewClient=object: WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView,request: WebResourceRequest): Boolean {
                     return !request.url.toString().startsWith("file:///android_asset/walkit/")
                 }
                 override fun onPageFinished(view: WebView,url: String) {
                     if(currentWebView===view) {
+                        view.post { view.evaluateJavascript("window.walkItResize && window.walkItResize()",null) }
                         view.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
                         view.evaluateJavascript("window.walkItRefreshPreview && window.walkItRefreshPreview()",null)
                     }

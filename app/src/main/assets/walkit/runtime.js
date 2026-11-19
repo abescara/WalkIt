@@ -19,6 +19,8 @@
     canvas.style.width = "390px";
     canvas.style.height = `${logicalHeight}px`;
   }
+  window.walkItResize = sizeToDevice;
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", sizeToDevice);
 
   function labelFor(button) {
     return (button.getAttribute("aria-label") || button.innerText || button.textContent || "").trim().replace(/\s+/g, " ");
