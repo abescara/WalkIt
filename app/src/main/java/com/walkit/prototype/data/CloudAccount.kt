@@ -214,6 +214,11 @@ class CloudAccount(context: Context) {
     fun mapReports(): JSONArray = requestArray("GET",
         "/rest/v1/reports?select=id,owner_id,description,category,latitude,longitude,created_at&order=created_at.desc&limit=100",null,true)
 
+    fun mapReportsAlongRoute(minLat: Double,maxLat: Double,minLon: Double,maxLon: Double): JSONArray = requestArray("GET",
+        "/rest/v1/reports?select=id,owner_id,description,category,latitude,longitude,created_at"+
+            "&latitude=gte.$minLat&latitude=lte.$maxLat&longitude=gte.$minLon&longitude=lte.$maxLon"+
+            "&order=created_at.desc&limit=500",null,true)
+
     fun reportPhotos(): JSONArray = requestArray("GET",
         "/rest/v1/report_photos?select=report_id,storage_path,position&order=position.asc&limit=1000",null,true)
 

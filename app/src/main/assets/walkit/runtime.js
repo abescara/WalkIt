@@ -273,6 +273,36 @@
     friends.list.innerHTML='<div style="padding:18px;opacity:.7">Loading friends…</div>';
     bridge.loadFriends();
   }
+  function prepareRouteScreen() {
+    if(screenName!=="Routes") return;
+    const status=document.getElementById("route-status");
+    const panel=status?.parentElement;
+    if(!panel) return;
+    panel.id="route-preview-panel";
+    const inactive=["wheelchair access","fewer stairs","smooth path","well lit"];
+    const filter=Array.from(panel.querySelectorAll("button")).find(button=>inactive.includes(labelFor(button).toLowerCase()))?.parentElement;
+    filter?.remove();
+    panel.style.transition="transform .25s ease, opacity .25s ease";
+    const rail=document.createElement("div");
+    rail.id="route-report-rail";
+    rail.style.cssText=`position:absolute;right:12px;top:350px;width:144px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:8;box-sizing:border-box`;
+    document.querySelector(".wrap > div")?.appendChild(rail);
+  }
+  window.walkItRouteLoading=function() {
+    const panel=document.getElementById("route-preview-panel");
+    if(panel) { panel.style.top="180px"; panel.style.bottom="auto"; panel.style.transform="translateY(-18px)"; panel.style.opacity="0.3"; requestAnimationFrame(()=>{ panel.style.transform="translateY(0)"; panel.style.opacity="1"; }); }
+    document.getElementById("route-report-rail")?.style.setProperty("display","none");
+    bridge.setRouteResultsVisible(true);
+  };
+  window.walkItRouteReports=function(payload) {
+    const rail=document.getElementById("route-report-rail"); if(!rail) return;
+    const panel=document.getElementById("route-preview-panel");
+    if(panel) rail.style.top=`${Math.max(350,panel.offsetTop+panel.offsetHeight+10)}px`;
+    let reports=[]; try { reports=JSON.parse(payload); } catch (_) {}
+    rail.innerHTML=`<b style="font-size:12px">Reports on route · ${reports.length}</b>`+
+      (reports.length?reports.map(report=>`<button data-route-report-lat="${Number(report.latitude)}" data-route-report-lon="${Number(report.longitude)}" style="display:block;width:100%;padding:9px 2px;text-align:left;border:0;border-bottom:1px solid #ddd;background:none;color:inherit;font:12px Inter,sans-serif"><b>${escapeHtml(report.category||"Report")}</b><br>${escapeHtml(report.description||"")}<br><small>${Number(report.distance_m)||0} m from route</small></button>`).join(""):'<div style="font-size:11px;opacity:.65;margin-top:8px">No shared reports near this path.</div>');
+    rail.style.display="block";
+  };
   let suggestionTimer;
   function suggestionBox(field) {
     const canvas=document.querySelector(".wrap > div");
@@ -491,6 +521,10 @@
       if (profileIcon && bridge) bridge.navigate("profile");
       return;
     }
+    if(button.hasAttribute("data-route-report-lat")) {
+      bridge.focusRouteReport(Number(button.dataset.routeReportLat),Number(button.dataset.routeReportLon));
+      return;
+    }
     const label = labelFor(button);
     const lower = label.toLowerCase();
     if(screenName==="Community") {
@@ -650,6 +684,7 @@
         return;
       }
       document.getElementById("route-status").textContent = "Finding a walking route…";
+      window.walkItRouteLoading();
       if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim());
       return;
     }
@@ -761,6 +796,7 @@
   renderRewards();
   renderCommunity();
   renderFriends();
+  prepareRouteScreen();
   hydrateReport();
   hydratePreview();
   if(screenName === "Routes" && bridge) {

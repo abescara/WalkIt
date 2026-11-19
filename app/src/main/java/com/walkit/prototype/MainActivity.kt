@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
     private var lastSubmittedLocation = ""
     private var forwardingMapGesture = false
     private var searchOverlayActive = false
+    private var routeResultsVisible = false
     private val placeSuggestionCache = mutableMapOf<String,org.json.JSONArray>()
     private val selectedPlaceCoordinates = mutableMapOf<String,LatLng>()
     private var lastPlaceSuggestionRequest = 0L
@@ -370,6 +371,7 @@ class MainActivity : ComponentActivity() {
 
     private fun clearFrontendView() {
         searchOverlayActive=false
+        routeResultsVisible=false
         currentWebView?.apply {
             stopLoading()
             (parent as? android.view.ViewGroup)?.removeView(this)
@@ -385,7 +387,11 @@ class MainActivity : ComponentActivity() {
         if(event.actionMasked==MotionEvent.ACTION_DOWN) {
             val scale=web.width/390f
             val designY=event.y/scale
-            forwardingMapGesture=!searchOverlayActive && designY in 158f..(if(currentWebScreen=="Routes") 460f else 738f)
+            val designX=event.x/scale
+            forwardingMapGesture=!searchOverlayActive && when(currentWebScreen) {
+                "Routes" -> if(routeResultsVisible) designY in 360f..738f && designX<225f else designY in 170f..650f
+                else -> designY in 158f..738f
+            }
         }
         if(!forwardingMapGesture) return false
         val copy=MotionEvent.obtain(event)
@@ -397,6 +403,7 @@ class MainActivity : ComponentActivity() {
 
     inner class FrontendBridge {
         @JavascriptInterface fun setSearchOverlayActive(active: Boolean) { searchOverlayActive=active }
+        @JavascriptInterface fun setRouteResultsVisible(visible: Boolean) { routeResultsVisible=visible }
         @JavascriptInterface fun login(email: String,password: String) {
             worker.execute {
                 val result=runCatching {
@@ -703,6 +710,10 @@ class MainActivity : ComponentActivity() {
             val start=EditText(this@MainActivity).apply { setText(lastRouteStartQuery) }
             val end=EditText(this@MainActivity).apply { setText(lastRouteEndQuery) }
             requestWalkingRoute(start,end,TextView(this@MainActivity),obstacle)
+        }
+        @JavascriptInterface fun focusRouteReport(latitude: Double,longitude: Double) = runOnUiThread {
+            if(latitude in 4.0..21.8 && longitude in 116.0..127.0)
+                currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(latitude,longitude),17.0),500)
         }
         @JavascriptInterface fun getRouteOrigin(): String = if(lastUserLocation!=null) "Current Location" else ""
         @JavascriptInterface fun pickRoutePoint(which: String) = runOnUiThread {
@@ -1121,6 +1132,9 @@ class MainActivity : ComponentActivity() {
 
     private fun resolvePlace(query: String): LatLng? {
         selectedPlaceCoordinates[query]?.let { return it }
+        runCatching { placeSuggestions(query).optJSONObject(0) }.getOrNull()?.let { match ->
+            return LatLng(match.getDouble("lat"),match.getDouble("lon"))
+        }
         val coordinates=query.split(",").map { it.trim().toDoubleOrNull() }
         if(coordinates.size==2 && coordinates[0]!=null && coordinates[1]!=null) {
             val lat=coordinates[0]!!; val lon=coordinates[1]!!
@@ -1162,23 +1176,8 @@ class MainActivity : ComponentActivity() {
                 }
                 val to=if(endQuery=="Pinned destination on map") routeEndPoint else resolvePlace(endQuery)
                 if(from==null || to==null) error("Start or destination could not be found in the Philippines")
-                val pair="${from.longitude},${from.latitude}|${to.longitude},${to.latitude}"
-                val query=URLEncoder.encode(pair,"UTF-8")
-                val noGo=avoidObstacle?.let { "&nogos=${URLEncoder.encode("${it.longitude},${it.latitude},80","UTF-8")}" }.orEmpty()
-                val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=hiking-mountain&alternativeidx=0&format=geojson$noGo").openConnection() as HttpURLConnection).apply {
-                    connectTimeout=15_000; readTimeout=25_000; requestMethod="GET"
-                }
-                val response=try {
-                    if(connection.responseCode !in 200..299) error("Route service returned ${connection.responseCode}")
-                    connection.inputStream.bufferedReader().use { it.readText() }
-                } finally { connection.disconnect() }
-                val features=JSONObject(response).getJSONArray("features")
-                val coordinates=features.getJSONObject(0).getJSONObject("geometry").getJSONArray("coordinates")
-                val points=(0 until coordinates.length()).map { index ->
-                    val coordinate=coordinates.getJSONArray(index)
-                    LatLng(coordinate.getDouble(1),coordinate.getDouble(0))
-                }
-                if(points.size<2) error("No route was found")
+                val points=runCatching { fetchWalkingRoute(from,to,avoidObstacle,"hiking-mountain") }
+                    .getOrElse { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     displayRoute(points,from,to)
@@ -1192,22 +1191,31 @@ class MainActivity : ComponentActivity() {
                     currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},'')",null)
                     worker.execute {
                         val reports=runCatching {
-                            val rows=cloud.mapReports()
+                            val rows=cloud.mapReportsAlongRoute(
+                                points.minOf { it.latitude }-0.002,points.maxOf { it.latitude }+0.002,
+                                points.minOf { it.longitude }-0.002,points.maxOf { it.longitude }+0.002)
                             (0 until rows.length()).map { rows.getJSONObject(it) }
                         }.getOrDefault(emptyList())
-                        val obstacle=reports.firstOrNull { report ->
+                        val encountered=reports.mapNotNull { report ->
+                            if(report.optString("owner_id")==cloud.userId()) return@mapNotNull null
+                            val created=runCatching { java.time.OffsetDateTime.parse(report.getString("created_at")).toInstant().toEpochMilli() }.getOrDefault(0L)
+                            if(created<legacyMapReportCutoff) return@mapNotNull null
                             val lat=report.optDouble("latitude"); val lon=report.optDouble("longitude")
-                            points.any { point ->
+                            val distance=points.minOf { point ->
                                 val meters=FloatArray(1)
                                 Location.distanceBetween(lat,lon,point.latitude,point.longitude,meters)
-                                meters[0]<50f
+                                meters[0].toDouble()
                             }
-                        }
+                            if(distance>80.0) null else report.apply { put("distance_m",distance.toInt()) }
+                        }.sortedBy { it.optInt("distance_m") }
+                        val obstacle=encountered.firstOrNull()
+                        val nearby=org.json.JSONArray(encountered)
                         runOnUiThread {
                             if(currentWebScreen=="Routes") {
                                 routeObstaclePoint=obstacle?.let { LatLng(it.getDouble("latitude"),it.getDouble("longitude")) }
                                 val warning=obstacle?.let { "Possible obstacle: ${it.optString("description")}" }.orEmpty()
                                 currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},${JSONObject.quote(warning)})",null)
+                                currentWebView?.evaluateJavascript("window.walkItRouteReports && window.walkItRouteReports(${JSONObject.quote(nearby.toString())})",null)
                             }
                         }
                     }
@@ -1220,6 +1228,27 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun fetchWalkingRoute(from: LatLng,to: LatLng,avoidObstacle: LatLng?,profile: String): List<LatLng> {
+        val pair="${from.longitude},${from.latitude}|${to.longitude},${to.latitude}"
+        val query=URLEncoder.encode(pair,"UTF-8")
+        val noGo=avoidObstacle?.let { "&nogos=${URLEncoder.encode("${it.longitude},${it.latitude},80","UTF-8")}" }.orEmpty()
+        val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=$profile&alternativeidx=0&format=geojson$noGo").openConnection() as HttpURLConnection).apply {
+            connectTimeout=15_000; readTimeout=30_000; requestMethod="GET"
+        }
+        val response=try {
+            if(connection.responseCode !in 200..299) error("Route service returned ${connection.responseCode}")
+            connection.inputStream.bufferedReader().use { it.readText() }
+        } finally { connection.disconnect() }
+        val coordinates=JSONObject(response).getJSONArray("features").getJSONObject(0)
+            .getJSONObject("geometry").getJSONArray("coordinates")
+        val points=(0 until coordinates.length()).map { index ->
+            val coordinate=coordinates.getJSONArray(index)
+            LatLng(coordinate.getDouble(1),coordinate.getDouble(0))
+        }
+        require(points.size>=2) { "No walkable route was found between these points." }
+        return points
     }
 
     private fun routeError(message: String) {
