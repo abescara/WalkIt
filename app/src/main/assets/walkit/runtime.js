@@ -255,6 +255,76 @@
     content.innerHTML=`<div style="padding:16px;border-radius:18px;background:#2b2b2b;color:#fff"><div style="font-size:12px;color:#c8c8c8">Current title</div><div style="font-size:22px;font-weight:700">${tier.name}</div><div style="margin-top:10px;height:8px;border-radius:4px;background:#555"><div style="width:${progress}%;height:8px;border-radius:4px;background:#5fbe2a"></div></div><div style="font-size:12px;color:#c8c8c8;margin-top:7px">${next?`${points} points · ${next.start-points} to ${next.name}`:`${points} points · highest title reached`}</div></div><h2 style="font-size:15px;margin:18px 0 10px;color:${foreground}">Badges</h2><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px">${badgeHtml}</div><h2 style="font-size:15px;margin:18px 0 8px;color:${foreground}">Ways to earn</h2><p style="font-size:12px;line-height:1.5;color:${muted};margin:0">Submit a map report to earn 10 points. Your badges update when the report reaches the shared leaderboard.</p>`;
   }
 
+  const forum={posts:[],selected:null,feed:null,mode:"feed",dark:fileName.endsWith("_Dark")};
+  function forumCard(post) {
+    const author=escapeHtml(post.display_name||post.username||"Walker");
+    const when=new Date(post.created_at).toLocaleString();
+    return `<button data-forum-post="${Number(post.id)}" style="display:block;width:100%;margin:0 0 12px;padding:16px;text-align:left;border:1px solid ${forum.dark?'#444':'#e3e3e3'};border-radius:18px;background:${forum.dark?'#242424':'#fff'};color:${forum.dark?'#f2f2f2':'#1a1a1a'};box-shadow:0 4px 14px #0001"><div style="font-size:12px;opacity:.65">${author} · ${escapeHtml(when)}</div><div style="font-size:16px;font-weight:700;margin-top:9px">${escapeHtml(post.title)}</div><div style="font-size:13px;line-height:1.45;margin-top:6px;white-space:pre-wrap">${escapeHtml(post.body)}</div><div style="font-size:12px;color:#5fbe2a;margin-top:12px">${Number(post.reply_count)||0} replies · Open discussion</div></button>`;
+  }
+  function renderForumFeed() {
+    if(!forum.feed) return;
+    forum.mode="feed";
+    forum.selected=null;
+    forum.feed.innerHTML=forum.posts.length?forum.posts.map(forumCard).join(""):'<div style="padding:24px;text-align:center;opacity:.7">No discussions yet. Start the first one.</div>';
+  }
+  function renderCommunity() {
+    if(!bridge || screenName!=="Community") return;
+    const canvas=document.querySelector(".wrap > div");
+    forum.feed=canvas && Array.from(canvas.children).find(item=>item.style.top==="228px");
+    if(!forum.feed) return;
+    forum.mode="feed";
+    forum.feed.style.overflowY="auto";
+    forum.feed.style.padding="0 16px 16px";
+    forum.feed.style.boxSizing="border-box";
+    forum.feed.innerHTML='<div style="padding:24px;text-align:center;opacity:.7">Loading discussions…</div>';
+    bridge.loadForumPosts();
+  }
+  function forumError(message) {
+    return /forum_(feed|posts|replies)|schema cache/i.test(message||"")
+      ? "The shared forum is being set up. Please try again after the database update."
+      : message||"The forum is unavailable right now.";
+  }
+  function showForumComposer() {
+    if(!forum.feed) return;
+    forum.mode="compose";
+    forum.feed.innerHTML=`<button id="forum-back" style="border:0;background:none;color:#5fbe2a;font-size:14px;font-weight:700;padding:0 0 14px">← Back to forum</button><h2 style="font-size:19px;margin:0 0 16px">Start a discussion</h2><label style="display:block;font-size:12px;font-weight:700;margin-bottom:6px">Title</label><input id="forum-title" maxlength="100" placeholder="What would you like to discuss?" style="width:100%;height:48px;box-sizing:border-box;border:1px solid #bbb;border-radius:14px;padding:0 12px;background:${forum.dark?'#242424':'#fff'};color:inherit;font:14px Inter,sans-serif"><label style="display:block;font-size:12px;font-weight:700;margin:16px 0 6px">Details</label><textarea id="forum-body" maxlength="3000" placeholder="Share details with other walkers" style="width:100%;height:150px;box-sizing:border-box;border:1px solid #bbb;border-radius:14px;padding:12px;background:${forum.dark?'#242424':'#fff'};color:inherit;font:14px Inter,sans-serif;resize:vertical"></textarea><div id="forum-message" role="status" style="min-height:20px;margin-top:8px;color:#b42318;font-size:12px"></div><button id="forum-submit" style="width:100%;height:48px;border:0;border-radius:24px;background:#5fbe2a;color:#10300a;font-weight:700">Post discussion</button>`;
+  }
+  function showForumThread(post) {
+    if(!forum.feed) return;
+    forum.mode="thread";
+    forum.selected=post;
+    forum.feed.innerHTML=`<button id="forum-back" style="border:0;background:none;color:#5fbe2a;font-size:14px;font-weight:700;padding:0 0 14px">← Back to forum</button><h2 style="font-size:19px;margin:0 0 6px">${escapeHtml(post.title)}</h2><div style="font-size:12px;opacity:.65">${escapeHtml(post.display_name||post.username||"Walker")} · ${escapeHtml(new Date(post.created_at).toLocaleString())}</div><p style="font-size:14px;line-height:1.5;white-space:pre-wrap">${escapeHtml(post.body)}</p><h3 style="font-size:15px;margin:24px 0 12px">Replies</h3><div id="forum-replies">Loading replies…</div><textarea id="forum-reply-body" maxlength="1000" placeholder="Write a reply" style="width:100%;height:88px;box-sizing:border-box;border:1px solid #bbb;border-radius:14px;padding:12px;margin-top:16px;background:${forum.dark?'#242424':'#fff'};color:inherit;font:14px Inter,sans-serif;resize:vertical"></textarea><div id="forum-message" role="status" style="min-height:20px;margin-top:8px;color:#b42318;font-size:12px"></div><button id="forum-reply-submit" style="width:100%;height:46px;border:0;border-radius:23px;background:#5fbe2a;color:#10300a;font-weight:700">Post reply</button>`;
+    bridge.loadForumReplies(Number(post.id));
+  }
+  window.walkItForumFeed=function(payload) {
+    let result; try { result=JSON.parse(payload); } catch (_) { result={error:"Could not load discussions."}; }
+    if(result.error) { if(forum.feed && forum.mode==="feed") forum.feed.innerHTML=`<div style="padding:20px;line-height:1.5">${escapeHtml(forumError(result.error))}</div>`; return; }
+    forum.posts=Array.isArray(result)?result:[];
+    if(forum.mode==="feed") renderForumFeed();
+  };
+  window.walkItForumReplies=function(payload) {
+    const target=document.getElementById("forum-replies"); if(!target) return;
+    let result; try { result=JSON.parse(payload); } catch (_) { result={error:"Could not load replies."}; }
+    if(result.error) { target.textContent=forumError(result.error); return; }
+    target.innerHTML=result.length?result.map(reply=>`<div style="padding:12px;margin-bottom:8px;border-radius:14px;background:${forum.dark?'#242424':'#f3f3f3'}"><b style="font-size:12px">${escapeHtml(reply.display_name||reply.username||"Walker")}</b><span style="font-size:11px;opacity:.6"> · ${escapeHtml(new Date(reply.created_at).toLocaleString())}</span><div style="font-size:13px;line-height:1.45;white-space:pre-wrap;margin-top:6px">${escapeHtml(reply.body)}</div></div>`).join(""):'<div style="font-size:13px;opacity:.65">No replies yet. Add the first one.</div>';
+  };
+  window.walkItForumPostSaved=function(payload) {
+    const result=JSON.parse(payload),button=document.getElementById("forum-submit");
+    if(button) button.disabled=false;
+    if(result.error) { const message=document.getElementById("forum-message"); if(message) message.textContent=forumError(result.error); return; }
+    forum.mode="feed";
+    forum.feed.innerHTML='<div style="padding:24px;text-align:center">Loading discussions…</div>';
+    bridge.loadForumPosts();
+  };
+  window.walkItForumReplySaved=function(payload) {
+    const result=JSON.parse(payload),button=document.getElementById("forum-reply-submit");
+    if(button) button.disabled=false;
+    if(result.error) { const message=document.getElementById("forum-message"); if(message) message.textContent=forumError(result.error); return; }
+    const field=document.getElementById("forum-reply-body"); if(field) field.value="";
+    if(forum.selected) bridge.loadForumReplies(Number(forum.selected.id));
+    bridge.loadForumPosts();
+  };
+
   document.addEventListener("click", function (event) {
     if(screenName==="Edit_Profile" && event.target.closest('[aria-label="Profile picture"], img[alt="Change photo"]')) {
       if(bridge) bridge.changeProfilePhoto();
@@ -273,6 +343,26 @@
     }
     const label = labelFor(button);
     const lower = label.toLowerCase();
+    if(screenName==="Community") {
+      const postId=Number(button.getAttribute("data-forum-post"));
+      if(postId>0) { const post=forum.posts.find(item=>Number(item.id)===postId); if(post) showForumThread(post); return; }
+      if(button.id==="forum-back") { renderForumFeed(); return; }
+      if(button.id==="forum-submit") {
+        const title=document.getElementById("forum-title")?.value.trim()||"";
+        const body=document.getElementById("forum-body")?.value.trim()||"";
+        const message=document.getElementById("forum-message");
+        if(title.length<5 || body.length<10) { if(message) message.textContent="Use at least 5 characters in the title and 10 in the details."; return; }
+        button.disabled=true; bridge.createForumPost(title,body); return;
+      }
+      if(button.id==="forum-reply-submit") {
+        const body=document.getElementById("forum-reply-body")?.value.trim()||"";
+        const message=document.getElementById("forum-message");
+        if(!body) { if(message) message.textContent="Write a reply first."; return; }
+        button.disabled=true; bridge.createForumReply(Number(forum.selected?.id),body); return;
+      }
+      if(lower==="forum") { renderForumFeed(); return; }
+      if(lower==="local updates") { bridge.showMessage("Local updates are not available yet. Forum discussions are open to all WalkIt users."); return; }
+    }
     if(button.id==="open-signup") { bridge.navigate("signup"); return; }
     if(button.id==="open-login") { bridge.navigate("login"); return; }
     if(button.id==="login-submit") {
@@ -374,7 +464,7 @@
       return;
     }
     if (lower === "done" || lower === "back to map" || lower === "home") { if (bridge) bridge.navigate("map"); return; }
-    if (lower === "create a forum") { if (bridge) bridge.showMessage("Forum posting will be enabled when the community service is connected."); return; }
+    if (lower === "create a forum") { showForumComposer(); return; }
     if (lower === "save changes") { if (bridge) bridge.showMessage("Profile editing is a visual prototype in this build."); return; }
     if (lower === "change photo") { if (bridge) bridge.changeProfilePhoto(); return; }
     if (lower === "light mode" || lower === "dark mode") { if (bridge) bridge.setDarkMode(lower === "dark mode"); return; }
@@ -456,6 +546,7 @@
   sizeToDevice();
   renderAccountPage();
   renderRewards();
+  renderCommunity();
   hydrateReport();
   hydratePreview();
   if(screenName === "Routes" && bridge) {

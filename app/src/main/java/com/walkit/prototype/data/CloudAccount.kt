@@ -65,6 +65,28 @@ class CloudAccount(context: Context) {
     fun leaderboard(): JSONArray = requestArray("GET",
         "/rest/v1/leaderboard?select=id,username,display_name,reports,comments,points&order=points.desc,display_name.asc",null,true)
 
+    fun forumPosts(): JSONArray = requestArray("GET",
+        "/rest/v1/forum_feed?select=id,author_id,username,display_name,title,body,created_at,reply_count&order=created_at.desc&limit=100",null,true)
+
+    fun forumReplies(postId: Long): JSONArray = requestArray("GET",
+        "/rest/v1/forum_thread_replies?post_id=eq.$postId&select=id,post_id,author_id,username,display_name,body,created_at&order=created_at.asc&limit=200",null,true)
+
+    fun createForumPost(title: String,body: String) {
+        require(title.trim().length in 5..100) { "Title needs 5–100 characters." }
+        require(body.trim().length in 10..3000) { "Post needs 10–3000 characters." }
+        val id=userId() ?: error("Log in to post in the forum.")
+        requestArray("POST","/rest/v1/forum_posts",
+            JSONObject().put("author_id",id).put("title",title.trim()).put("body",body.trim()),true)
+    }
+
+    fun createForumReply(postId: Long,body: String) {
+        require(postId>0) { "Choose a forum post." }
+        require(body.trim().length in 1..1000) { "Reply needs 1–1000 characters." }
+        val id=userId() ?: error("Log in to reply.")
+        requestArray("POST","/rest/v1/forum_replies",
+            JSONObject().put("post_id",postId).put("author_id",id).put("body",body.trim()),true)
+    }
+
     fun postReport(description: String,category: String,latitude: Double,longitude: Double): String {
         val id=userId() ?: error("Please log in again.")
         val response=requestArray("POST","/rest/v1/reports",

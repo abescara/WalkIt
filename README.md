@@ -14,9 +14,10 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 - Predefined pathway segments and routes, route comparison, saved routes, and preferences
 - A shared leaderboard and report badges based on reports uploaded to Supabase; route, detour, and forum badges are shown as upcoming
 - Supabase email/password accounts with local report storage and shared report metadata
-- Interactive MapLibre street map with road labels, OpenStreetMap data attribution, current-location control, photo-location picker, and tappable report markers
+- Interactive MapLibre street map with road labels, OpenStreetMap data attribution, automatic location centering, photo-location picker, and tappable report markers
 - Expandable point-to-point route planner; route calculation needs an internet connection and uses the public BRouter service
 - Report discussion UI with comments, optional anonymous posting, and optional local photo attachments
+- Shared forum posts and replies after the forum migration is applied; no sample forum comments
 - Packaged mobile screen designs for community, routes, rewards, notifications, profile, and report flows; some content remains a visual prototype
 
 See [the project proposal](docs/WalkIt_Project_Proposal.pdf) for detailed requirements and [the implementation checklist](docs/IMPLEMENTATION_PLAN.md) for a development sequence.
@@ -31,7 +32,7 @@ Read [the team workflow](docs/team/TEAM_WORKFLOW.md), [the code boundaries](docs
 2. Build and run the `app` configuration on an Android 8.0 (API 26) or newer device or emulator. Or run `./gradlew assembleDebug` (`.\gradlew.bat assembleDebug` on Windows).
 3. Create an account or log in, then from the Map screen tap the camera button, choose Single or Batch, capture photos, then tap Done in Batch mode. Pan the map beneath the center pin and choose the photo location, then add a category, description, and time. Tap a report marker to view its photos and add to its discussion. Open Routes, enter addresses or place names, or use the map pin buttons to choose start and destination.
 
-The draft uses four clearly fictional pathway names and two sample routes. Replace them after the team agrees on the demonstration area. Street map tiles and route calculation require internet access; reports, photos, and discussions remain on-device. See [shared accounts setup](docs/SHARED_ACCOUNTS_SETUP.md) for the hosted database and [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
+The draft uses four clearly fictional pathway names and two sample routes. Replace them after the team agrees on the demonstration area. Street map tiles and route calculation require internet access. Report photos and report-marker discussions remain on-device; forum posts and replies are shared after the forum migration. See [shared accounts setup](docs/SHARED_ACCOUNTS_SETUP.md) for the hosted database and [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
 
 The HTML screen package and Android/native integration are described in [frontend integration](docs/FRONTEND_INTEGRATION.md).
 

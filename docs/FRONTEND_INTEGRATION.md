@@ -21,6 +21,6 @@ Keep the bridge limited to packaged local pages. Do not enable external page nav
 
 ## Current prototype limits
 
-Community, friends, and notifications still contain sample content from the designs. Account details, leaderboard entries, report counts, points, and report badges use shared account data. Profile name and bio edits persist through Supabase. Selected profile photos, report photos, and discussions are stored on the current device and do not yet appear on another device. Route preferences are still visual controls.
+Friends and notifications still contain sample content from the designs. The community forum loads shared posts and replies after its database migration; its sample cards are removed. Account details, leaderboard entries, report counts, points, and report badges use shared account data. Profile name and bio edits persist through Supabase. Selected profile photos, report photos, and report-marker discussions are stored on the current device and do not yet appear on another device. Route preferences are still visual controls.
 
 When updating a screen, edit the packaged asset and keep its image paths relative to `screens/`. The WebView loads the individual screen files, not the desktop gallery.

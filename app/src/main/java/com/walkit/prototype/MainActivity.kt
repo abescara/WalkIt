@@ -157,8 +157,8 @@ class MainActivity : ComponentActivity() {
     private var lastUserLocation: LatLng? = null
     private var userLocationMarker: org.maplibre.android.annotations.Marker? = null
     private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
-    private var mapTarget = LatLng(12.8797,121.7740)
-    private var mapZoom = 5.5
+    private var mapTarget = LatLng(14.5995,120.9842)
+    private var mapZoom = 14.0
     private var startupLocationRequested = false
     private var waitingForLocationSettings = false
     private var pickingPhotoLocation = false
@@ -181,6 +181,12 @@ class MainActivity : ComponentActivity() {
         session=UserSession(this)
         cloud=CloudAccount(this)
         darkThemeEnabled=getSharedPreferences("walkit-ui",MODE_PRIVATE).getBoolean("dark_theme",false)
+        getSharedPreferences("walkit-location",MODE_PRIVATE).let { saved ->
+            if(saved.contains("latitude") && saved.contains("longitude")) {
+                mapTarget=LatLng(Double.fromBits(saved.getLong("latitude",0)),Double.fromBits(saved.getLong("longitude",0)))
+                mapZoom=16.0
+            }
+        }
         MapLibre.getInstance(this)
         window.statusBarColor = Color.rgb(248, 250, 252)
         window.navigationBarColor = Color.WHITE
@@ -425,6 +431,42 @@ class MainActivity : ComponentActivity() {
             }
         }.toString()
         @JavascriptInterface fun getCurrentUserId(): String = cloud.userId() ?: ""
+        private fun sendForumResult(web: WebView?,callback: String,payload: String) = runOnUiThread {
+            if(web===currentWebView && currentWebScreen=="Community")
+                web?.evaluateJavascript("window.$callback && window.$callback(${JSONObject.quote(payload)})",null)
+        }
+        @JavascriptInterface fun loadForumPosts() {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.forumPosts().toString() }
+                    .getOrElse { JSONObject().put("error",it.message ?: "Could not load the forum.").toString() }
+                sendForumResult(web,"walkItForumFeed",result)
+            }
+        }
+        @JavascriptInterface fun loadForumReplies(postId: Long) {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.forumReplies(postId).toString() }
+                    .getOrElse { JSONObject().put("error",it.message ?: "Could not load replies.").toString() }
+                sendForumResult(web,"walkItForumReplies",result)
+            }
+        }
+        @JavascriptInterface fun createForumPost(title: String,body: String) {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.createForumPost(title,body) }
+                    .fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not post.") })
+                sendForumResult(web,"walkItForumPostSaved",result.toString())
+            }
+        }
+        @JavascriptInterface fun createForumReply(postId: Long,body: String) {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.createForumReply(postId,body) }
+                    .fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not reply.") })
+                sendForumResult(web,"walkItForumReplySaved",result.toString())
+            }
+        }
         @JavascriptInterface fun getProfilePhotoPath(): String {
             val id=cloud.userId() ?: return ""
             return File(profilePhotoDir,"$id.jpg").takeIf { it.exists() && it.length()>0 }?.absolutePath ?: ""
@@ -1110,6 +1152,8 @@ class MainActivity : ComponentActivity() {
         lastUserLocation=point
         mapTarget=point
         mapZoom=16.0
+        getSharedPreferences("walkit-location",MODE_PRIVATE).edit()
+            .putLong("latitude",point.latitude.toBits()).putLong("longitude",point.longitude.toBits()).apply()
         routeOriginField?.setText(formatCoordinate(point))
         addUserLocationMarker(point)
         currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
