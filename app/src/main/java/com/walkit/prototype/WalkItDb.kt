@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.security.SecureRandom
+import java.util.Locale
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -14,12 +15,21 @@ data class Hazard(val id: Long, val ownerId: Long, val owner: String, val segmen
 data class Route(val name: String, val meters: Int, val hazards: Int, val barriers: Int)
 data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>)
 data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long)
+data class UserProfile(
+    val id: Long,
+    val username: String,
+    val displayName: String,
+    val bio: String,
+    val reportCount: Int,
+    val commentCount: Int
+)
+data class LeaderboardEntry(val userId: Long, val displayName: String, val username: String, val reports: Int, val comments: Int, val points: Int)
 
-class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 3) {
+class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpenHelper(context, databaseName, null, 4) {
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, salt BLOB NOT NULL, password_hash BLOB NOT NULL)")
+        db.execSQL("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, bio TEXT NOT NULL DEFAULT '', salt BLOB NOT NULL, password_hash BLOB NOT NULL)")
         db.execSQL("CREATE TABLE pathway_segments (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
         db.execSQL("CREATE TABLE walking_routes (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, distance_m INTEGER NOT NULL CHECK(distance_m > 0))")
         db.execSQL("CREATE TABLE route_segments (route_id INTEGER NOT NULL REFERENCES walking_routes(id), segment_id INTEGER NOT NULL REFERENCES pathway_segments(id), sequence_no INTEGER NOT NULL, PRIMARY KEY(route_id, segment_id), UNIQUE(route_id, sequence_no))")
@@ -42,6 +52,10 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createPhotoTables(db)
         if (oldVersion < 3) createPhotoDiscussionTable(db)
+        if (oldVersion < 4) {
+            // Keep existing accounts and reports when adding profile information.
+            db.execSQL("ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''")
+        }
     }
 
     private fun createPhotoTables(db: SQLiteDatabase) {
@@ -118,24 +132,93 @@ class WalkItDb(context: Context) : SQLiteOpenHelper(context, "walkit.db", null, 
         return writableDatabase.insertOrThrow("users", null, values)
     }
 
-    fun register(username: String, password: String): Long {
-        val normalized = username.trim().lowercase()
+    fun register(username: String, password: String, displayName: String = username.trim()): Long {
+        val normalized = username.trim().lowercase(Locale.ROOT)
         require(normalized.matches(Regex("[a-z0-9_]{3,24}"))) { "Username needs 3–24 letters, digits, or underscores." }
+        require(normalized != "guest") { "Please choose a different username." }
         require(password.length in 12..128) { "Password needs 12–128 characters." }
+        require(displayName.trim().length in 1..60) { "Name needs 1–60 characters." }
         val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
         val values = ContentValues().apply {
-            put("username", normalized); put("display_name", normalized)
+            put("username", normalized); put("display_name", displayName.trim())
             put("salt", salt); put("password_hash", hash(password, salt))
         }
-        return writableDatabase.insertOrThrow("users", null, values)
+        return try {
+            writableDatabase.insertOrThrow("users", null, values)
+        } catch (_: android.database.sqlite.SQLiteConstraintException) {
+            throw IllegalArgumentException("That username is already taken.")
+        }
     }
 
     fun login(username: String, password: String): Long? {
-        readableDatabase.rawQuery("SELECT id,salt,password_hash FROM users WHERE username=?", arrayOf(username.trim().lowercase())).use { c ->
+        val normalized = username.trim().lowercase(Locale.ROOT)
+        if (normalized == "guest" || password.length !in 12..128) return null
+        readableDatabase.rawQuery("SELECT id,salt,password_hash FROM users WHERE username=?", arrayOf(normalized)).use { c ->
             if (!c.moveToFirst()) return null
             val expected = c.getBlob(2)
             return if (java.security.MessageDigest.isEqual(expected, hash(password, c.getBlob(1)))) c.getLong(0) else null
         }
+    }
+
+    fun profile(userId: Long): UserProfile? {
+        val sql = """
+            SELECT u.id, u.username, u.display_name, u.bio,
+                (SELECT COUNT(*) FROM photo_reports WHERE owner_id=u.id) +
+                (SELECT COUNT(*) FROM hazard_reports WHERE owner_id=u.id),
+                (SELECT COUNT(*) FROM photo_comments WHERE owner_id=u.id)
+            FROM users u WHERE u.id=? AND u.username<>'guest'
+        """.trimIndent()
+        readableDatabase.rawQuery(sql, arrayOf(userId.toString())).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            return UserProfile(
+                cursor.getLong(0), cursor.getString(1), cursor.getString(2),
+                cursor.getString(3), cursor.getInt(4), cursor.getInt(5)
+            )
+        }
+    }
+
+    fun leaderboard(): List<LeaderboardEntry> = buildList {
+        val sql = """
+            SELECT u.id,u.display_name,u.username,
+              (SELECT COUNT(*) FROM photo_reports WHERE owner_id=u.id) +
+              (SELECT COUNT(*) FROM hazard_reports WHERE owner_id=u.id) AS reports,
+              (SELECT COUNT(*) FROM photo_comments WHERE owner_id=u.id) AS comments
+            FROM users u WHERE u.username<>'guest'
+            ORDER BY reports DESC, comments DESC, u.display_name COLLATE NOCASE
+        """.trimIndent()
+        readableDatabase.rawQuery(sql,null).use { cursor ->
+            while(cursor.moveToNext()) {
+                val reports=cursor.getInt(3)
+                val comments=cursor.getInt(4)
+                add(LeaderboardEntry(cursor.getLong(0),cursor.getString(1),cursor.getString(2),reports,comments,reports*10+comments*2))
+            }
+        }
+    }.sortedWith(compareByDescending<LeaderboardEntry> { it.points }.thenBy { it.displayName.lowercase(Locale.ROOT) })
+
+    fun updateProfile(userId: Long, displayName: String, bio: String) {
+        require(displayName.trim().length in 1..60) { "Name needs 1–60 characters." }
+        require(bio.trim().length <= 300) { "Bio must be 300 characters or fewer." }
+        val values = ContentValues().apply {
+            put("display_name", displayName.trim())
+            put("bio", bio.trim())
+        }
+        val updated = writableDatabase.update(
+            "users", values, "id=? AND username<>'guest'", arrayOf(userId.toString())
+        )
+        check(updated == 1) { "Account no longer exists. Please log in again." }
+    }
+
+    fun changePassword(userId: Long, currentPassword: String, newPassword: String) {
+        require(newPassword.length in 12..128) { "Password needs 12–128 characters." }
+        require(currentPassword != newPassword) { "Choose a different new password." }
+        val user = profile(userId) ?: throw IllegalArgumentException("Account no longer exists.")
+        require(login(user.username, currentPassword) == userId) { "Current password is incorrect." }
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val values = ContentValues().apply {
+            put("salt", salt)
+            put("password_hash", hash(newPassword, salt))
+        }
+        check(writableDatabase.update("users", values, "id=?", arrayOf(userId.toString())) == 1)
     }
 
     fun segments(): List<Pair<Long, String>> = buildList {

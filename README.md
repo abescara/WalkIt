@@ -4,15 +4,15 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 
 ## Status
 
-**Buildable MVP draft.** The prototype opens directly to a live Philippines map with a packaged HTML frontend for the map shell and secondary screens. There is no login gate. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Report markers open their photos and a local discussion. A route planner connects two points through BRouter. Reports, photos, and comments remain on the device; cross-device sync is not configured.
+**Buildable MVP draft.** The prototype now has local account registration and login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Report markers open their photos and a local discussion. A route planner connects two points through BRouter. Accounts, reports, photos, comments, and rankings remain on the device; cross-device sync is not configured.
 
 ## Planned prototype
 
 - Kotlin Android app in Android Studio
 - On-device SQLite database through `SQLiteOpenHelper`
-- Guest-mode hazard reports with local persistence and owner-restricted changes
+- Account-owned hazard reports with local persistence and owner-restricted changes
 - Predefined pathway segments and routes, route comparison, saved routes, and preferences
-- Derived badges, points, and a local leaderboard
+- A local leaderboard with 10 points per report and 2 points per comment; badges remain planned
 - Local account and report storage on one installation; accounts and reports do not sync between devices
 - Interactive MapLibre street map with road labels, OpenStreetMap data attribution, current-location control, photo-location picker, and tappable report markers
 - Expandable point-to-point route planner; route calculation needs an internet connection and uses the public BRouter service
@@ -29,9 +29,9 @@ Read [the team workflow](docs/team/TEAM_WORKFLOW.md), [the code boundaries](docs
 
 1. Open this repository in Android Studio with JDK 17 and Android SDK 36 installed.
 2. Build and run the `app` configuration on an Android 8.0 (API 26) or newer device or emulator. Or run `./gradlew assembleDebug` (`.\gradlew.bat assembleDebug` on Windows).
-3. From the Map screen, tap the camera button, choose Single or Batch, capture photos, then tap Done in Batch mode. Pan the map beneath the center pin and choose the photo location, then add a category, description, and time. Tap a report marker to view its photos and add to its discussion. Open Routes or use the map route control to set Point A and Point B coordinates and request a route.
+3. Create an account or log in, then from the Map screen tap the camera button, choose Single or Batch, capture photos, then tap Done in Batch mode. Pan the map beneath the center pin and choose the photo location, then add a category, description, and time. Tap a report marker to view its photos and add to its discussion. Open Routes or use the map route control to set Point A and Point B coordinates and request a route.
 
-The draft uses four clearly fictional pathway names and two sample routes. Replace them after the team agrees on the demonstration area. Street map tiles and route calculation require internet access; reports, photos, and discussions remain on-device. See [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
+The draft uses four clearly fictional pathway names and two sample routes. Replace them after the team agrees on the demonstration area. Street map tiles and route calculation require internet access; reports, photos, and discussions remain on-device. See [shared accounts setup](docs/SHARED_ACCOUNTS_SETUP.md) for the planned hosted database and [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
 
 The HTML screen package and Android/native integration are described in [frontend integration](docs/FRONTEND_INTEGRATION.md).
 
@@ -46,3 +46,4 @@ Sam Denielle Arias; Helijah Sephreen Coo; Angel John Escara; Daniel Kenneth Eugi
 ## License
 
 No license has been selected. Contact the project team before reusing the material.
+

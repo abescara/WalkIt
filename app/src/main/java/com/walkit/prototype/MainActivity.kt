@@ -51,10 +51,12 @@ import java.net.URL
 import java.net.URLEncoder
 import android.location.Geocoder
 import org.json.JSONObject
+import com.walkit.prototype.data.UserSession
 
 class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var db: WalkItDb
+    private lateinit var session: UserSession
     private lateinit var screen: FrameLayout
     private var userId: Long? = null
     private var mapView: MapView? = null
@@ -137,6 +139,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = WalkItDb(this)
+        session=UserSession(this)
         darkThemeEnabled=getSharedPreferences("walkit-ui",MODE_PRIVATE).getBoolean("dark_theme",false)
         MapLibre.getInstance(this)
         window.statusBarColor = Color.rgb(248, 250, 252)
@@ -144,7 +147,10 @@ class MainActivity : ComponentActivity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         screen = FrameLayout(this)
         setContentView(screen)
-        runDb({ db.ensureGuestUser() }) { id -> userId=id; showTab(Tab.MAP) }
+        runDb({ session.userId()?.let { db.profile(it) } }) { profile ->
+            if(profile==null) showAuthScreen("Login")
+            else { userId=profile.id; showTab(Tab.MAP) }
+        }
     }
 
     private fun <T> runDb(task: () -> T, done: (T) -> Unit) {
@@ -157,6 +163,7 @@ class MainActivity : ComponentActivity() {
     private fun toast(message: String) = Toast.makeText(this,message,Toast.LENGTH_LONG).show()
 
     private fun showTab(tab: Tab) {
+        if(userId==null) { showAuthScreen("Login"); return }
         captureTransitionFrame()
         selectedTab=tab
         if (tab!=Tab.MAP || currentMap!=null) {
@@ -199,6 +206,15 @@ class MainActivity : ComponentActivity() {
         val web=makeFrontendWebView(page)
         screen.addView(web,FrameLayout.LayoutParams(-1,-1))
         showTransitionFrame()
+    }
+
+    private fun showAuthScreen(page: String) {
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        disposeMap()
+        clearFrontendView()
+        screen.removeAllViews()
+        screen.setBackgroundColor(Color.WHITE)
+        screen.addView(makeFrontendWebView(page),FrameLayout.LayoutParams(-1,-1))
     }
 
     private fun makeFrontendWebView(page: String): WebView {
@@ -297,6 +313,48 @@ class MainActivity : ComponentActivity() {
     }
 
     inner class FrontendBridge {
+        @JavascriptInterface fun login(username: String,password: String) {
+            worker.execute {
+                val result=runCatching { db.login(username,password) }
+                runOnUiThread {
+                    val id=result.getOrNull()
+                    if(id==null) accountError("Incorrect username or password.")
+                    else { session.signIn(id); userId=id; showTab(Tab.MAP) }
+                }
+            }
+        }
+        @JavascriptInterface fun register(username: String,password: String,displayName: String) {
+            worker.execute {
+                val result=runCatching { db.register(username,password,displayName) }
+                runOnUiThread {
+                    result.fold({ id -> session.signIn(id); userId=id; showTab(Tab.MAP) },
+                        { error -> accountError(error.message ?: "Could not create account.") })
+                }
+            }
+        }
+        @JavascriptInterface fun logout() = runOnUiThread {
+            session.signOut(); userId=null; capturedPhotos.clear(); showAuthScreen("Login")
+        }
+        @JavascriptInterface fun getProfile(): String {
+            val profile=userId?.let { db.profile(it) } ?: return "{}"
+            return JSONObject().put("username",profile.username).put("displayName",profile.displayName)
+                .put("bio",profile.bio).put("reports",profile.reportCount).put("comments",profile.commentCount).toString()
+        }
+        @JavascriptInterface fun saveProfile(displayName: String,bio: String) {
+            val id=userId ?: return
+            worker.execute {
+                val result=runCatching { db.updateProfile(id,displayName,bio) }
+                runOnUiThread { result.fold({ accountError("Profile saved.") },{ accountError(it.message ?: "Could not save profile.") }) }
+            }
+        }
+        @JavascriptInterface fun getLeaderboard(): String = org.json.JSONArray().apply {
+            db.leaderboard().forEachIndexed { index,entry ->
+                put(JSONObject().put("rank",index+1).put("userId",entry.userId)
+                    .put("displayName",entry.displayName).put("username",entry.username)
+                    .put("reports",entry.reports).put("comments",entry.comments).put("points",entry.points))
+            }
+        }.toString()
+        @JavascriptInterface fun getCurrentUserId(): Long = userId ?: -1L
         @JavascriptInterface fun navigate(destination: String) = runOnUiThread {
             when(destination.lowercase()) {
                 "map", "main" -> {
@@ -312,6 +370,8 @@ class MainActivity : ComponentActivity() {
                 "edit_profile" -> showWebScreen("Edit_Profile")
                 "leaderboard" -> showWebScreen("Leaderboard")
                 "leaderboard_nationwide" -> showWebScreen("Leaderboard_Nationwide")
+                "login" -> showAuthScreen("Login")
+                "signup" -> showAuthScreen("Signup")
             }
         }
         @JavascriptInterface fun openCamera() = runOnUiThread { requestCamera() }
@@ -400,6 +460,10 @@ class MainActivity : ComponentActivity() {
                 showWebScreen("Report_Preview")
             }
         }
+    }
+
+    private fun accountError(message: String) {
+        currentWebView?.evaluateJavascript("window.walkItAccountMessage && window.walkItAccountMessage(${JSONObject.quote(message)})",null)
     }
 
     private fun showCoordinateSearch() {

@@ -98,6 +98,29 @@
     });
   }
 
+  function renderAccountPage() {
+    if (!bridge || !["Login","Signup","Profile","Edit_Profile","Leaderboard","Leaderboard_Nationwide"].includes(screenName)) return;
+    const canvas=document.querySelector(".wrap > div");
+    if (!canvas) return;
+    const input=(id,label,type="text",value="")=>`<label style="display:block;margin:14px 0 5px;font-size:13px;font-weight:600">${label}</label><input id="${id}" type="${type}" value="${escapeHtml(value)}" style="width:100%;height:48px;border:1px solid #d1d5db;border-radius:14px;padding:0 14px;box-sizing:border-box;font:15px Inter,sans-serif;background:#fff;color:#111">`;
+    const button=(id,label,primary=true)=>`<button id="${id}" style="width:100%;height:48px;margin-top:16px;border:0;border-radius:24px;background:${primary?'#5fbe2a':'#f0f2f0'};color:#17230f;font-size:15px;font-weight:700">${label}</button>`;
+    const shell=(title,content)=>`<div style="position:absolute;inset:0;background:#f8faf7;color:#17230f;font:14px Inter,sans-serif;overflow-y:auto"><div style="padding:34px 26px 30px"><img src="../images/logo.png" alt="Walk It" style="width:38px;height:52px;object-fit:contain"><h1 style="font-size:25px;margin:18px 0 12px">${title}</h1>${content}<div id="account-message" role="status" style="min-height:22px;margin-top:14px;color:#b42318"></div></div></div>`;
+    if (screenName==="Login") canvas.innerHTML=shell("Welcome back",`<p>Log in to WalkIt on this device.</p>${input("account-username","Username")}${input("account-password","Password","password")}${button("login-submit","Log in")}${button("open-signup","Create an account",false)}`);
+    if (screenName==="Signup") canvas.innerHTML=shell("Create account",`${input("account-name","Display name")}${input("account-username","Username")}${input("account-password","Password (12 or more characters)","password")}${input("account-confirm","Confirm password","password")}${button("signup-submit","Create account")}${button("open-login","Back to login",false)}`);
+    if (screenName==="Profile" || screenName==="Edit_Profile") {
+      let profile={}; try { profile=JSON.parse(bridge.getProfile()); } catch (_) {}
+      canvas.innerHTML=shell("Profile",`<p style="color:#54615a">@${escapeHtml(profile.username||"")}</p><p>${profile.reports||0} reports · ${profile.comments||0} comments</p>${input("profile-name","Display name","text",profile.displayName||"")}<label style="display:block;margin:14px 0 5px;font-size:13px;font-weight:600">Bio</label><textarea id="profile-bio" maxlength="300" style="width:100%;height:90px;border:1px solid #d1d5db;border-radius:14px;padding:12px;box-sizing:border-box;font:15px Inter,sans-serif">${escapeHtml(profile.bio||"")}</textarea>${button("profile-save","Save profile")}${button("profile-leaderboard","Leaderboard",false)}${button("profile-map","Back to map",false)}${button("profile-logout","Log out",false)}`);
+    }
+    if (screenName.startsWith("Leaderboard")) {
+      let entries=[]; try { entries=JSON.parse(bridge.getLeaderboard()); } catch (_) {}
+      const current=bridge.getCurrentUserId();
+      const rows=entries.length ? entries.map(entry=>`<div style="display:flex;align-items:center;gap:12px;padding:13px;margin:8px 0;border-radius:16px;background:${entry.userId===current?'#e7f6dc':'#fff'}"><b style="width:28px">#${entry.rank}</b><div style="flex:1"><b>${escapeHtml(entry.displayName)}</b><div style="font-size:12px;color:#5b675d">${entry.reports} reports · ${entry.comments} comments</div></div><b>${entry.points} pts</b></div>`).join("") : "<p>No ranked accounts yet. Post a report to earn points.</p>";
+      canvas.innerHTML=shell("Leaderboard",`<p>10 points per report · 2 points per comment</p><p style="font-size:12px;color:#5b675d">Accounts on this device</p>${rows}${button("leaderboard-back","Back to rewards",false)}`);
+    }
+  }
+
+  function escapeHtml(value) { return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char])); }
+
   document.addEventListener("click", function (event) {
     const locationSearch = event.target.closest("#search-location");
     if (locationSearch && bridge) { bridge.searchLocation(); return; }
@@ -112,6 +135,19 @@
     }
     const label = labelFor(button);
     const lower = label.toLowerCase();
+    if(button.id==="open-signup") { bridge.navigate("signup"); return; }
+    if(button.id==="open-login") { bridge.navigate("login"); return; }
+    if(button.id==="login-submit") { bridge.login(document.getElementById("account-username").value,document.getElementById("account-password").value); return; }
+    if(button.id==="signup-submit") {
+      const password=document.getElementById("account-password").value;
+      if(password!==document.getElementById("account-confirm").value) { window.walkItAccountMessage("Passwords do not match."); return; }
+      bridge.register(document.getElementById("account-username").value,password,document.getElementById("account-name").value); return;
+    }
+    if(button.id==="profile-save") { bridge.saveProfile(document.getElementById("profile-name").value,document.getElementById("profile-bio").value); return; }
+    if(button.id==="profile-logout") { bridge.logout(); return; }
+    if(button.id==="profile-leaderboard") { bridge.navigate("leaderboard"); return; }
+    if(button.id==="profile-map") { bridge.navigate("map"); return; }
+    if(button.id==="leaderboard-back") { bridge.navigate("rewards"); return; }
     if (lower === "pin route start on map" || lower === "pin route destination on map") {
       const start=document.getElementById("route-origin");
       const end=document.getElementById("route-destination");
@@ -218,6 +254,7 @@
   window.walkItRefreshDraft = hydrateReport;
   window.walkItRefreshPreview = hydratePreview;
   window.walkItClearDraft = clearDraft;
+  window.walkItAccountMessage = function(message) { const view=document.getElementById("account-message"); if(view) view.textContent=message; };
   window.walkItRouteReady = function(summary,warning) {
     const status=document.getElementById("route-status");
     const details=document.getElementById("route-summary");
@@ -244,6 +281,7 @@
     });
   };
   sizeToDevice();
+  renderAccountPage();
   hydrateReport();
   hydratePreview();
   if(screenName === "Routes" && bridge) {
