@@ -14,6 +14,7 @@ Existing device-only accounts cannot be copied into Supabase as passwords becaus
 8. Run [`supabase/05_oauth_profiles.sql`](../supabase/05_oauth_profiles.sql) in the SQL Editor before enabling Google or Apple. It gives social users a valid profile and username at signup.
 9. Run [`supabase/06_friends.sql`](../supabase/06_friends.sql) in the SQL Editor to enable friend requests and accepted friendships. Until this is applied, the Friends tab shows a setup message.
 10. Run [`supabase/07_report_conversations.sql`](../supabase/07_report_conversations.sql) in the SQL Editor to enable threaded map-report replies, reactions, and shared profile photos. Users who already chose a profile photo should reopen the updated app while signed in, or choose the photo again, to upload it.
+11. Run [`supabase/08_forum_media_votes.sql`](../supabase/08_forum_media_votes.sql) in the SQL Editor to enable forum post photos and upvotes/downvotes.
 
 ## Google and Apple sign-in
 

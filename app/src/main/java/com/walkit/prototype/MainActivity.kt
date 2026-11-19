@@ -102,6 +102,20 @@ class MainActivity : ComponentActivity() {
         }
     }
     private var selectedDiscussionPhoto: String? = null
+    private var selectedForumPhoto: String? = null
+    private val forumPhotoPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if(uri!=null) worker.execute {
+            val path=runCatching {
+                val file=File(photoDir,"forum_${System.currentTimeMillis()}.jpg")
+                contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use(input::copyTo) }
+                file.absolutePath.takeIf { file.exists() && file.length()>0 }
+            }.getOrNull()
+            runOnUiThread {
+                selectedForumPhoto=path
+                currentWebView?.evaluateJavascript("window.walkItForumPhotoSelected && window.walkItForumPhotoSelected(${JSONObject.quote(path ?: "")})",null)
+            }
+        }
+    }
     private var discussionPhotoPreview: ImageView? = null
     private val discussionPhotoPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if(uri!=null) worker.execute {
@@ -521,7 +535,16 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface fun loadForumPosts() {
             val web=currentWebView
             worker.execute {
-                val result=runCatching { cloud.forumPosts().toString() }
+                val result=runCatching {
+                    val posts=cloud.forumPosts()
+                    for(index in 0 until posts.length()) {
+                        val post=posts.getJSONObject(index)
+                        post.optString("image_path").takeIf { it.isNotBlank() }?.let { path ->
+                            cachedForumPhoto(path)?.let { post.put("image_url","file://$it") }
+                        }
+                    }
+                    posts.toString()
+                }
                     .getOrElse { JSONObject().put("error",it.message ?: "Could not load the forum.").toString() }
                 sendForumResult(web,"walkItForumFeed",result)
             }
@@ -536,11 +559,31 @@ class MainActivity : ComponentActivity() {
         }
         @JavascriptInterface fun createForumPost(title: String,body: String) {
             val web=currentWebView
+            val photo=selectedForumPhoto
             worker.execute {
-                val result=runCatching { cloud.createForumPost(title,body) }
+                val result=runCatching { cloud.createForumPost(title,body,photo?.let(::File)) }
                     .fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not post.") })
+                if(result.optBoolean("ok")) selectedForumPhoto=null
                 sendForumResult(web,"walkItForumPostSaved",result.toString())
             }
+        }
+        @JavascriptInterface fun chooseForumPhoto() = runOnUiThread { forumPhotoPicker.launch("image/*") }
+        @JavascriptInterface fun clearForumPhoto() { selectedForumPhoto=null }
+        @JavascriptInterface fun voteForumPost(postId: Long,value: Int) {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.voteForumPost(postId,value) }
+                    .fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not vote.") })
+                sendForumResult(web,"walkItForumVoteSaved",result.toString())
+            }
+        }
+        @JavascriptInterface fun shareForumPost(title: String,body: String) = runOnUiThread {
+            val intent=android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type="text/plain"
+                putExtra(android.content.Intent.EXTRA_SUBJECT,title)
+                putExtra(android.content.Intent.EXTRA_TEXT,"$title\n\n$body\n\nShared from WalkIt Forums")
+            }
+            startActivity(android.content.Intent.createChooser(intent,"Share forum post"))
         }
         @JavascriptInterface fun createForumReply(postId: Long,body: String) {
             val web=currentWebView
@@ -1443,6 +1486,18 @@ class MainActivity : ComponentActivity() {
         if(!target.exists() || target.length()==0L) {
             val pending=File(folder,"$name.${Thread.currentThread().id}.pending")
             pending.writeBytes(cloud.downloadPhoto(storagePath))
+            if(!target.exists()) pending.renameTo(target) else pending.delete()
+        }
+        target.absolutePath.takeIf { target.exists() && target.length()>0 }
+    }.getOrNull()
+
+    private fun cachedForumPhoto(storagePath: String): String? = runCatching {
+        val folder=File(cacheDir,"shared-forum-photos").apply { mkdirs() }
+        val name=java.util.UUID.nameUUIDFromBytes(storagePath.toByteArray()).toString()+".jpg"
+        val target=File(folder,name)
+        if(!target.exists() || target.length()==0L) {
+            val pending=File(folder,"$name.${Thread.currentThread().id}.pending")
+            pending.writeBytes(cloud.downloadForumPhoto(storagePath))
             if(!target.exists()) pending.renameTo(target) else pending.delete()
         }
         target.absolutePath.takeIf { target.exists() && target.length()>0 }

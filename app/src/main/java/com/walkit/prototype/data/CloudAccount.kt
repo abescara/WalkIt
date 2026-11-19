@@ -98,8 +98,9 @@ class CloudAccount(context: Context) {
     fun leaderboard(): JSONArray = requestArray("GET",
         "/rest/v1/leaderboard?select=id,username,display_name,reports,comments,points&order=points.desc,display_name.asc",null,true)
 
-    fun forumPosts(): JSONArray = requestArray("GET",
-        "/rest/v1/forum_feed?select=id,author_id,username,display_name,title,body,created_at,reply_count&order=created_at.desc&limit=100",null,true)
+    fun forumPosts(): JSONArray = runCatching { requestArray("GET",
+        "/rest/v1/forum_feed?select=id,author_id,username,display_name,title,body,created_at,reply_count,image_path,score,my_vote&order=created_at.desc&limit=100",null,true) }
+        .getOrElse { requestArray("GET","/rest/v1/forum_feed?select=id,author_id,username,display_name,title,body,created_at,reply_count&order=created_at.desc&limit=100",null,true) }
 
     fun forumReplies(postId: Long): JSONArray = requestArray("GET",
         "/rest/v1/forum_thread_replies?post_id=eq.$postId&select=id,post_id,author_id,username,display_name,body,created_at&order=created_at.asc&limit=200",null,true)
@@ -140,12 +141,35 @@ class CloudAccount(context: Context) {
         request("DELETE","/rest/v1/friendships?id=eq.$id",null,true)
     }
 
-    fun createForumPost(title: String,body: String) {
+    fun createForumPost(title: String,body: String,imageFile: File?=null) {
         require(title.trim().length in 5..100) { "Title needs 5–100 characters." }
         require(body.trim().length in 10..3000) { "Post needs 10–3000 characters." }
         val id=userId() ?: error("Log in to post in the forum.")
-        requestArray("POST","/rest/v1/forum_posts",
-            JSONObject().put("author_id",id).put("title",title.trim()).put("body",body.trim()),true)
+        val imagePath=imageFile?.let {
+            val path="$id/post-${java.util.UUID.randomUUID()}.jpg"
+            uploadImage("forum-photos",path,it,1600)
+            path
+        }
+        val payload=JSONObject().put("author_id",id).put("title",title.trim()).put("body",body.trim())
+        if(imagePath!=null) payload.put("image_path",imagePath)
+        requestArray("POST","/rest/v1/forum_posts",payload,true)
+    }
+
+    fun voteForumPost(postId: Long,value: Int) {
+        require(postId>0 && value in -1..1) { "Invalid vote." }
+        val id=userId() ?: error("Log in to vote.")
+        if(value==0) rawRequest("DELETE","/rest/v1/forum_votes?post_id=eq.$postId&voter_id=eq.$id",null,true,false)
+        else rawRequest("POST","/rest/v1/forum_votes?on_conflict=post_id,voter_id",
+            JSONObject().put("post_id",postId).put("voter_id",id).put("value",value),true,false,"resolution=merge-duplicates")
+    }
+
+    fun downloadForumPhoto(path: String): ByteArray {
+        val request=Request.Builder().url("$base/storage/v1/object/forum-photos/${encodePath(path)}")
+            .header("apikey",key).header("Authorization","Bearer ${token()}").get().build()
+        return http.newCall(request).execute().use { response ->
+            if(!response.isSuccessful) error("Could not load a forum photo (${response.code}).")
+            response.body?.bytes() ?: error("The forum photo is empty.")
+        }
     }
 
     fun createForumReply(postId: Long,body: String) {

@@ -322,7 +322,7 @@
   function forumCard(post) {
     const author=escapeHtml(post.display_name||post.username||"Walker");
     const when=new Date(post.created_at).toLocaleString();
-    return `<button data-forum-post="${Number(post.id)}" style="display:block;width:100%;margin:0 0 12px;padding:16px;text-align:left;border:1px solid ${forum.dark?'#444':'#e3e3e3'};border-radius:18px;background:${forum.dark?'#242424':'#fff'};color:${forum.dark?'#f2f2f2':'#1a1a1a'};box-shadow:0 4px 14px #0001"><div style="font-size:12px;opacity:.65">${author} · ${escapeHtml(when)}</div><div style="font-size:16px;font-weight:700;margin-top:9px">${escapeHtml(post.title)}</div><div style="font-size:13px;line-height:1.45;margin-top:6px;white-space:pre-wrap">${escapeHtml(post.body)}</div><div style="font-size:12px;color:#5fbe2a;margin-top:12px">${Number(post.reply_count)||0} replies · Open discussion</div></button>`;
+    return `<div style="margin:0 0 12px;padding:16px;border:1px solid ${forum.dark?'#444':'#e3e3e3'};border-radius:18px;background:${forum.dark?'#242424':'#fff'};color:${forum.dark?'#f2f2f2':'#1a1a1a'};box-shadow:0 4px 14px #0001"><button data-forum-post="${Number(post.id)}" style="display:block;width:100%;padding:0;text-align:left;border:0;background:none;color:inherit"><div style="font-size:12px;opacity:.65">${author} · ${escapeHtml(when)}</div><div style="font-size:16px;font-weight:700;margin-top:9px">${escapeHtml(post.title)}</div><div style="font-size:13px;line-height:1.45;margin-top:6px;white-space:pre-wrap">${escapeHtml(post.body)}</div>${post.image_url?`<img src="${escapeHtml(post.image_url)}" alt="Forum post photo" style="display:block;width:100%;max-height:180px;object-fit:contain;border-radius:12px;margin-top:10px;background:#eee">`:''}</button><div style="display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap"><button data-forum-vote="1" data-post-id="${Number(post.id)}" style="border:0;background:none;color:${Number(post.my_vote)===1?'#5fbe2a':'inherit'}">▲ ${Number(post.score)||0}</button><button data-forum-vote="-1" data-post-id="${Number(post.id)}" style="border:0;background:none;color:${Number(post.my_vote)===-1?'#d63b2b':'inherit'}">▼</button><button data-forum-post="${Number(post.id)}" style="border:0;background:none;color:inherit">💬 ${Number(post.reply_count)||0}</button><button data-forum-share="${Number(post.id)}" style="border:0;background:none;color:inherit">↗ Share</button></div></div>`;
   }
   function renderForumFeed() {
     if(!forum.feed) return;
@@ -351,13 +351,23 @@
   function showForumComposer() {
     if(!forum.feed) return;
     forum.mode="compose";
+    forum.photo="";
+    bridge.clearForumPhoto();
     forum.feed.innerHTML=`<button id="forum-back" style="border:0;background:none;color:#5fbe2a;font-size:14px;font-weight:700;padding:0 0 14px">← Back to forum</button><h2 style="font-size:19px;margin:0 0 16px">Start a discussion</h2><label style="display:block;font-size:12px;font-weight:700;margin-bottom:6px">Title</label><input id="forum-title" maxlength="100" placeholder="What would you like to discuss?" style="width:100%;height:48px;box-sizing:border-box;border:1px solid #bbb;border-radius:14px;padding:0 12px;background:${forum.dark?'#242424':'#fff'};color:inherit;font:14px Inter,sans-serif"><label style="display:block;font-size:12px;font-weight:700;margin:16px 0 6px">Details</label><textarea id="forum-body" maxlength="3000" placeholder="Share details with other walkers" style="width:100%;height:150px;box-sizing:border-box;border:1px solid #bbb;border-radius:14px;padding:12px;background:${forum.dark?'#242424':'#fff'};color:inherit;font:14px Inter,sans-serif;resize:vertical"></textarea><div id="forum-message" role="status" style="min-height:20px;margin-top:8px;color:#b42318;font-size:12px"></div><button id="forum-submit" style="width:100%;height:48px;border:0;border-radius:24px;background:#5fbe2a;color:#10300a;font-weight:700">Post discussion</button>`;
+    document.getElementById("forum-message")?.insertAdjacentHTML("beforebegin",'<button id="forum-add-photo" style="display:block;margin:12px 0;padding:10px 14px;border:1px solid #aaa;border-radius:12px;background:transparent;color:inherit">＋ Add photo</button><img id="forum-photo-preview" alt="Selected forum photo" style="display:none;width:100%;max-height:180px;object-fit:contain;border-radius:12px">');
   }
+  window.walkItForumPhotoSelected=function(path) {
+    forum.photo=path||"";
+    const preview=document.getElementById("forum-photo-preview");
+    if(preview) { preview.src=path?"file://"+path:""; preview.style.display=path?"block":"none"; }
+  };
   function showForumThread(post) {
     if(!forum.feed) return;
     forum.mode="thread";
     forum.selected=post;
     forum.feed.innerHTML=`<button id="forum-back" style="border:0;background:none;color:#5fbe2a;font-size:14px;font-weight:700;padding:0 0 14px">← Back to forum</button><h2 style="font-size:19px;margin:0 0 6px">${escapeHtml(post.title)}</h2><div style="font-size:12px;opacity:.65">${escapeHtml(post.display_name||post.username||"Walker")} · ${escapeHtml(new Date(post.created_at).toLocaleString())}</div><p style="font-size:14px;line-height:1.5;white-space:pre-wrap">${escapeHtml(post.body)}</p><h3 style="font-size:15px;margin:24px 0 12px">Replies</h3><div id="forum-replies">Loading replies…</div><textarea id="forum-reply-body" maxlength="1000" placeholder="Write a reply" style="width:100%;height:88px;box-sizing:border-box;border:1px solid #bbb;border-radius:14px;padding:12px;margin-top:16px;background:${forum.dark?'#242424':'#fff'};color:inherit;font:14px Inter,sans-serif;resize:vertical"></textarea><div id="forum-message" role="status" style="min-height:20px;margin-top:8px;color:#b42318;font-size:12px"></div><button id="forum-reply-submit" style="width:100%;height:46px;border:0;border-radius:23px;background:#5fbe2a;color:#10300a;font-weight:700">Post reply</button>`;
+    const repliesHeading=forum.feed.querySelector("h3");
+    repliesHeading?.insertAdjacentHTML("beforebegin",`${post.image_url?`<img src="${escapeHtml(post.image_url)}" alt="Forum post photo" style="display:block;width:100%;max-height:240px;object-fit:contain;border-radius:12px;margin:10px 0;background:#eee">`:''}<div style="display:flex;gap:14px;align-items:center"><button data-forum-vote="1" data-post-id="${Number(post.id)}" style="border:0;background:none;color:${Number(post.my_vote)===1?'#5fbe2a':'inherit'}">▲ ${Number(post.score)||0}</button><button data-forum-vote="-1" data-post-id="${Number(post.id)}" style="border:0;background:none;color:${Number(post.my_vote)===-1?'#d63b2b':'inherit'}">▼</button><button data-forum-share="${Number(post.id)}" style="border:0;background:none;color:inherit">↗ Share</button></div>`);
     bridge.loadForumReplies(Number(post.id));
   }
   window.walkItForumFeed=function(payload) {
@@ -365,6 +375,10 @@
     if(result.error) { if(forum.feed && forum.mode==="feed") forum.feed.innerHTML=`<div style="padding:20px;line-height:1.5">${escapeHtml(forumError(result.error))}</div>`; return; }
     forum.posts=Array.isArray(result)?result:[];
     if(forum.mode==="feed") renderForumFeed();
+    else if(forum.mode==="thread" && forum.selected) {
+      const updated=forum.posts.find(item=>Number(item.id)===Number(forum.selected.id));
+      if(updated) showForumThread(updated);
+    }
   };
   window.walkItForumReplies=function(payload) {
     const target=document.getElementById("forum-replies"); if(!target) return;
@@ -388,6 +402,11 @@
     if(forum.selected) bridge.loadForumReplies(Number(forum.selected.id));
     bridge.loadForumPosts();
   };
+  window.walkItForumVoteSaved=function(payload) {
+    let result; try { result=JSON.parse(payload); } catch (_) { result={error:"Could not vote."}; }
+    if(result.error) { const message=document.getElementById("forum-message"); if(message) message.textContent=result.error; else alert(result.error); return; }
+    bridge.loadForumPosts();
+  };
 
   document.addEventListener("click", function (event) {
     if(screenName==="Edit_Profile" && event.target.closest('[aria-label="Profile picture"], img[alt="Change photo"]')) {
@@ -408,6 +427,17 @@
     const label = labelFor(button);
     const lower = label.toLowerCase();
     if(screenName==="Community") {
+      if(button.id==="forum-add-photo") { bridge.chooseForumPhoto(); return; }
+      if(button.hasAttribute("data-forum-vote")) {
+        const post=forum.posts.find(item=>Number(item.id)===Number(button.dataset.postId));
+        if(post) bridge.voteForumPost(Number(post.id),Number(post.my_vote)===Number(button.dataset.forumVote)?0:Number(button.dataset.forumVote));
+        return;
+      }
+      if(button.hasAttribute("data-forum-share")) {
+        const post=forum.posts.find(item=>Number(item.id)===Number(button.dataset.forumShare));
+        if(post) bridge.shareForumPost(post.title,post.body);
+        return;
+      }
       if(lower==="local updates") { showLocalUpdates(); return; }
       if(lower==="forum") {
         localStorage.setItem("walkit-community-tab","forum");
