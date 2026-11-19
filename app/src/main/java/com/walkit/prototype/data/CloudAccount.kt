@@ -163,6 +163,13 @@ class CloudAccount(context: Context) {
             JSONObject().put("post_id",postId).put("voter_id",id).put("value",value),true,false,"resolution=merge-duplicates")
     }
 
+    fun deleteForumPost(postId: Long) {
+        require(postId>0) { "Choose a forum post." }
+        val id=userId() ?: error("Log in to remove your post.")
+        val removed=requestArray("DELETE","/rest/v1/forum_posts?id=eq.$postId&author_id=eq.$id&select=id",null,true,true)
+        require(removed.length()==1) { "Only the post owner can remove this post." }
+    }
+
     fun downloadForumPhoto(path: String): ByteArray {
         val request=Request.Builder().url("$base/storage/v1/object/forum-photos/${encodePath(path)}")
             .header("apikey",key).header("Authorization","Bearer ${token()}").get().build()

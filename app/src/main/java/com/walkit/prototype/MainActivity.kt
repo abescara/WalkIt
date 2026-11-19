@@ -539,6 +539,7 @@ class MainActivity : ComponentActivity() {
                     val posts=cloud.forumPosts()
                     for(index in 0 until posts.length()) {
                         val post=posts.getJSONObject(index)
+                        post.put("is_owner",post.optString("author_id")==cloud.userId())
                         post.optString("image_path").takeIf { it.isNotBlank() }?.let { path ->
                             cachedForumPhoto(path)?.let { post.put("image_url","file://$it") }
                         }
@@ -577,6 +578,21 @@ class MainActivity : ComponentActivity() {
                 sendForumResult(web,"walkItForumVoteSaved",result.toString())
             }
         }
+        @JavascriptInterface fun deleteForumPost(postId: Long) = runOnUiThread {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("Delete this post?")
+                .setMessage("The post and all its comments will be removed. This cannot be undone.")
+                .setNegativeButton("Cancel",null)
+                .setPositiveButton("Delete") { _,_ ->
+                    val web=currentWebView
+                    worker.execute {
+                        val result=runCatching { cloud.deleteForumPost(postId) }
+                            .fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not remove the post.") })
+                        sendForumResult(web,"walkItForumPostDeleted",result.toString())
+                    }
+                }
+                .show()
+            }
         @JavascriptInterface fun shareForumPost(title: String,body: String) = runOnUiThread {
             val intent=android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                 type="text/plain"
