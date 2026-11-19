@@ -161,6 +161,7 @@
         const progress=canvas.querySelector('div[style*="width:62%"]');
         if(progress) progress.style.width=next?Math.round(points/next*100)+"%":"100%";
       } else {
+        canvas.querySelectorAll('[aria-label="Profile picture"], img[alt="Change photo"]').forEach(item=>item.style.cursor="pointer");
         replaceField(leaf("Juan Dela Cruz"),"profile-name","text","Display name",profile.displayName||"");
         const username=leaf("@juan.walks"); if(username) username.textContent="@"+(profile.username||"");
         const bio=leaf("Walking Sampaloc daily and reporting broken paths so everyone can get around safely.");
@@ -180,6 +181,7 @@
           canvas.appendChild(logout);
         }
       }
+      window.walkItRefreshProfilePhoto();
       return;
     }
     if(screenName.startsWith("Leaderboard")) renderDesignedLeaderboard(canvas);
@@ -206,6 +208,17 @@
   }
 
   function escapeHtml(value) { return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char])); }
+
+  window.walkItRefreshProfilePhoto = function() {
+    if(!bridge || !["Profile","Edit_Profile"].includes(screenName)) return;
+    const path=bridge.getProfilePhotoPath();
+    if(!path) return;
+    document.querySelectorAll('[aria-label="Profile picture"], [role="img"][aria-label="Profile"]').forEach(item=>{
+      item.style.backgroundImage=`url("file://${encodeURI(path)}?v=${Date.now()}")`;
+      item.style.backgroundSize="cover";
+      item.style.backgroundPosition="center";
+    });
+  };
 
   function renderRewards() {
     if (!bridge || screenName !== "Rewards") return;
@@ -243,6 +256,10 @@
   }
 
   document.addEventListener("click", function (event) {
+    if(screenName==="Edit_Profile" && event.target.closest('[aria-label="Profile picture"], img[alt="Change photo"]')) {
+      if(bridge) bridge.changeProfilePhoto();
+      return;
+    }
     const locationSearch = event.target.closest("#search-location");
     if (locationSearch && bridge) { bridge.searchLocation(); return; }
     const locationPin = event.target.closest("#report-location");
@@ -359,7 +376,7 @@
     if (lower === "done" || lower === "back to map" || lower === "home") { if (bridge) bridge.navigate("map"); return; }
     if (lower === "create a forum") { if (bridge) bridge.showMessage("Forum posting will be enabled when the community service is connected."); return; }
     if (lower === "save changes") { if (bridge) bridge.showMessage("Profile editing is a visual prototype in this build."); return; }
-    if (lower === "change photo") { if (bridge) bridge.showMessage("Profile photo editing will be connected with profile storage."); return; }
+    if (lower === "change photo") { if (bridge) bridge.changeProfilePhoto(); return; }
     if (lower === "light mode" || lower === "dark mode") { if (bridge) bridge.setDarkMode(lower === "dark mode"); return; }
 
     if (screenName === "Report" && ["broken sidewalk", "blocked path", "no ramp", "poor lighting"].includes(lower)) {

@@ -113,6 +113,37 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private val profilePhotoDir by lazy { File(filesDir,"profile-photos").apply { mkdirs() } }
+    private val profilePhotoPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val accountId=cloud.userId()
+        if(uri==null || accountId==null) return@registerForActivityResult
+        worker.execute {
+            val result=runCatching {
+                val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,bounds) }
+                require(bounds.outWidth>0 && bounds.outHeight>0) { "Choose an image file." }
+                val sample=BitmapFactory.Options().apply {
+                    inSampleSize=maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/1024)
+                }
+                val bitmap=contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,sample) }
+                    ?: error("Could not read that photo.")
+                val target=File(profilePhotoDir,"$accountId.jpg")
+                val pending=File(profilePhotoDir,"$accountId.pending")
+                pending.outputStream().use { output -> bitmap.compress(Bitmap.CompressFormat.JPEG,85,output) }
+                bitmap.recycle()
+                require(pending.length()>0) { "Could not save that photo." }
+                if(target.exists()) target.delete()
+                require(pending.renameTo(target)) { "Could not save that photo." }
+            }
+            runOnUiThread {
+                result.fold({
+                    if(currentWebScreen=="Edit_Profile" || currentWebScreen=="Profile")
+                        currentWebView?.evaluateJavascript("window.walkItRefreshProfilePhoto && window.walkItRefreshProfilePhoto()",null)
+                    toast("Profile photo updated")
+                },{ toast(it.message ?: "Could not change the profile photo.") })
+            }
+        }
+    }
     private var cameraController: LifecycleCameraController? = null
     private var cameraModeBatch = false
     private var cameraUsesFrontLens = false
@@ -122,6 +153,7 @@ class MainActivity : ComponentActivity() {
     private var captureInProgress = false
     private var locationManager: LocationManager? = null
     private var pendingLocationListener: LocationListener? = null
+    private var locationRequestInFlight = false
     private var lastUserLocation: LatLng? = null
     private var userLocationMarker: org.maplibre.android.annotations.Marker? = null
     private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
@@ -393,6 +425,14 @@ class MainActivity : ComponentActivity() {
             }
         }.toString()
         @JavascriptInterface fun getCurrentUserId(): String = cloud.userId() ?: ""
+        @JavascriptInterface fun getProfilePhotoPath(): String {
+            val id=cloud.userId() ?: return ""
+            return File(profilePhotoDir,"$id.jpg").takeIf { it.exists() && it.length()>0 }?.absolutePath ?: ""
+        }
+        @JavascriptInterface fun changeProfilePhoto() = runOnUiThread {
+            if(cloud.userId()==null) { toast("Log in to change your profile photo."); return@runOnUiThread }
+            profilePhotoPicker.launch("image/*")
+        }
         @JavascriptInterface fun getRewards(): String = runCatching {
             val id=cloud.userId() ?: error("Log in to view rewards.")
             val rows=cloud.leaderboard()
@@ -698,7 +738,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         if(photoLocationPicking && lastUserLocation==null) showMyLocation()
-        if(!photoLocationPicking && !routeMode && !startupLocationRequested) {
+        if(!photoLocationPicking && !routeMode && (!startupLocationRequested || lastUserLocation==null)) {
             startupLocationRequested=true
             showMyLocation()
         }
@@ -987,6 +1027,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showMyLocation() {
+        if(locationRequestInFlight) return
         val fine=ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED
         val coarse=ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED
         if(!fine && !coarse) {
@@ -1011,30 +1052,52 @@ class MainActivity : ComponentActivity() {
         }
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.R) {
             try {
+                locationRequestInFlight=true
                 manager.getCurrentLocation(provider,null,mainExecutor) { location ->
-                    if(location==null) toast("Could not get your location. Check that Location is turned on.")
+                    locationRequestInFlight=false
+                    if(location==null) listenForLocation(manager,provider)
                     else displayUserLocation(location)
                 }
-            } catch (_: SecurityException) { toast("Allow location access to show your position.") }
+            } catch (_: SecurityException) {
+                locationRequestInFlight=false
+                toast("Allow location access to show your position.")
+            }
         } else {
-            var gotLocation=false
-            try {
-                val cached=manager.getLastKnownLocation(provider)
-                if(cached!=null) { displayUserLocation(cached); gotLocation=true }
-                val listener=object: LocationListener {
-                    override fun onLocationChanged(location: Location) {
-                        manager.removeUpdates(this)
-                        pendingLocationListener=null
-                        displayUserLocation(location)
-                    }
+            listenForLocation(manager,provider)
+        }
+    }
+
+    private fun listenForLocation(manager: LocationManager,provider: String) {
+        if(locationRequestInFlight) return
+        try {
+            val providers=listOf(provider,LocationManager.NETWORK_PROVIDER).distinct()
+                .filter { manager.isProviderEnabled(it) }
+            val cached=providers.mapNotNull { manager.getLastKnownLocation(it) }
+                .filter { System.currentTimeMillis()-it.time < 10*60*1000L }
+                .minByOrNull { it.accuracy }
+            if(cached!=null) displayUserLocation(cached)
+            val listener=object: LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    manager.removeUpdates(this)
+                    pendingLocationListener=null
+                    locationRequestInFlight=false
+                    displayUserLocation(location)
                 }
-                pendingLocationListener=listener
-                manager.requestLocationUpdates(provider,0L,0f,listener,Looper.getMainLooper())
-                screen.postDelayed({
-                    pendingLocationListener?.let { manager.removeUpdates(it); pendingLocationListener=null }
-                    if(!gotLocation) toast("Could not get your location. Check that Location is turned on.")
-                },12_000L)
-            } catch (_: SecurityException) { toast("Allow location access to show your position.") }
+            }
+            pendingLocationListener=listener
+            locationRequestInFlight=true
+            providers.forEach { manager.requestLocationUpdates(it,0L,0f,listener,Looper.getMainLooper()) }
+            screen.postDelayed({
+                if(pendingLocationListener===listener) {
+                    manager.removeUpdates(listener)
+                    pendingLocationListener=null
+                    locationRequestInFlight=false
+                    if(cached==null) toast("Could not get your location. Check that Location is turned on.")
+                }
+            },12_000L)
+        } catch (_: SecurityException) {
+            locationRequestInFlight=false
+            toast("Allow location access to show your position.")
         }
     }
 
@@ -1440,6 +1503,10 @@ class MainActivity : ComponentActivity() {
         mapView?.onResume()
         if(waitingForLocationSettings) {
             waitingForLocationSettings=false
+            showMyLocation()
+        } else if(currentMap!=null && selectedTab==Tab.MAP && lastUserLocation==null &&
+            (ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED ||
+             ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED)) {
             showMyLocation()
         }
     }
