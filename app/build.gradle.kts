@@ -25,6 +25,7 @@ android {
         implementation("androidx.camera:camera-lifecycle:1.6.2")
         implementation("androidx.camera:camera-view:1.6.2")
         implementation("androidx.activity:activity-ktx:1.13.0")
+        implementation("com.squareup.okhttp3:okhttp:4.12.0")
         androidTestImplementation("androidx.test:runner:1.6.2")
         androidTestImplementation("androidx.test.ext:junit:1.2.1")
     }

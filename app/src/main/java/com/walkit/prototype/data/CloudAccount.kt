@@ -4,15 +4,18 @@ import android.content.Context
 import com.walkit.prototype.BuildConfig
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 /** Auth and profile requests use only the public project key and the user's token. */
 class CloudAccount(context: Context) {
     private val prefs=context.getSharedPreferences("walkit_cloud_session",Context.MODE_PRIVATE)
     private val base=BuildConfig.SUPABASE_URL.trimEnd('/')
     private val key=BuildConfig.SUPABASE_PUBLISHABLE_KEY
+    private val http=OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).build()
 
     val configured: Boolean get() = base.startsWith("https://") && key.startsWith("sb_publishable_")
     fun userId(): String? = prefs.getString("user_id",null)
@@ -102,30 +105,21 @@ class CloudAccount(context: Context) {
 
     private fun rawRequest(method: String,path: String,body: JSONObject?,auth: Boolean,returnRows: Boolean): String {
         check(configured) { "Supabase is not configured." }
-        val connection=(URL(base+path).openConnection() as HttpURLConnection).apply {
-            requestMethod=method
-            connectTimeout=15_000
-            readTimeout=20_000
-            setRequestProperty("apikey",key)
-            setRequestProperty("Content-Type","application/json")
-            if(auth) setRequestProperty("Authorization","Bearer ${token()}")
-            if(returnRows) setRequestProperty("Prefer","return=representation")
-            if(body!=null) {
-                doOutput=true
-                outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            }
-        }
-        return try {
-            val text=(if(connection.responseCode in 200..299) connection.inputStream else connection.errorStream)
-                ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if(connection.responseCode !in 200..299) {
+        val request=Request.Builder().url(base+path).header("apikey",key).apply {
+            if(auth) header("Authorization","Bearer ${token()}")
+            if(returnRows) header("Prefer","return=representation")
+            method(method,body?.toString()?.toRequestBody("application/json".toMediaType()))
+        }.build()
+        return http.newCall(request).execute().use { response ->
+            val text=response.body?.string().orEmpty()
+            if(!response.isSuccessful) {
                 val error=runCatching { JSONObject(text) }.getOrNull()
                 throw IllegalArgumentException(error?.optString("msg")?.takeIf { it.isNotBlank() }
                     ?: error?.optString("error_description")?.takeIf { it.isNotBlank() }
                     ?: error?.optString("message")?.takeIf { it.isNotBlank() }
-                    ?: "Supabase request failed (${connection.responseCode}).")
+                    ?: "Supabase request failed (${response.code}).")
             }
             text
-        } finally { connection.disconnect() }
+        }
     }
 }
