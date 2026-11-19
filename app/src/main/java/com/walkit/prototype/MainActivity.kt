@@ -171,6 +171,9 @@ class MainActivity : ComponentActivity() {
     private var pickingRoutePoint: String? = null
     private var routeStartPoint: LatLng? = null
     private var routeEndPoint: LatLng? = null
+    private var routeObstaclePoint: LatLng? = null
+    private var lastRouteStartQuery = ""
+    private var lastRouteEndQuery = ""
     private var routePanelView: View? = null
     private var routeOriginField: EditText? = null
     private var routeDestinationField: EditText? = null
@@ -200,6 +203,7 @@ class MainActivity : ComponentActivity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         screen = FrameLayout(this)
         setContentView(screen)
+        if(intent?.data?.scheme=="walkit") { handleAuthRedirect(intent.data!!); return }
         runDb({ cloud.restore()?.let { cloud.profile() } }) { profile ->
             if(profile==null) showAuthScreen("Login")
             else {
@@ -207,6 +211,27 @@ class MainActivity : ComponentActivity() {
                 runDb({ db.ensureCloudUser(profile.getString("id"),profile.getString("display_name")) }) { id ->
                     userId=id; showTab(Tab.MAP); syncCloudReports(id)
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.data?.takeIf { it.scheme=="walkit" }?.let(::handleAuthRedirect)
+    }
+
+    private fun handleAuthRedirect(uri: android.net.Uri) {
+        worker.execute {
+            val result=runCatching {
+                cloud.acceptAuthRedirect(uri)
+                val profile=cloud.profile()
+                db.ensureCloudUser(profile.getString("id"),profile.getString("display_name")) to profile
+            }
+            runOnUiThread {
+                result.fold({ (id,profile) ->
+                    cloudProfile=profile; userId=id; showTab(Tab.MAP); syncCloudReports(id)
+                },{ error -> showAuthScreen("Login"); accountError(error.message ?: "Could not complete sign-in.") })
             }
         }
     }
@@ -383,6 +408,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        @JavascriptInterface fun signInWithProvider(provider: String) {
+            worker.execute {
+                val result=runCatching {
+                    val url=cloud.oauthUrl(provider)
+                    if(!cloud.providerEnabled(provider)) error("${provider.replaceFirstChar { it.uppercase() }} sign-in is not enabled in Supabase yet.")
+                    url
+                }
+                runOnUiThread {
+                    result.fold({ url ->
+                        try { startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(url))) }
+                        catch (_: Exception) { accountError("No browser is available to complete sign-in.") }
+                    },{ error -> accountError(error.message ?: "This sign-in option is unavailable.") })
+                }
+            }
+        }
         @JavascriptInterface fun register(email: String,username: String,password: String,displayName: String) {
             worker.execute {
                 val result=runCatching {
@@ -554,6 +594,12 @@ class MainActivity : ComponentActivity() {
             val start=EditText(this@MainActivity).apply { setText(origin) }
             val end=EditText(this@MainActivity).apply { setText(destination) }
             requestWalkingRoute(start,end,TextView(this@MainActivity))
+        }
+        @JavascriptInterface fun planDetour() = runOnUiThread {
+            val obstacle=routeObstaclePoint ?: run { routeError("Find a route with a reported obstacle first."); return@runOnUiThread }
+            val start=EditText(this@MainActivity).apply { setText(lastRouteStartQuery) }
+            val end=EditText(this@MainActivity).apply { setText(lastRouteEndQuery) }
+            requestWalkingRoute(start,end,TextView(this@MainActivity),obstacle)
         }
         @JavascriptInterface fun getRouteOrigin(): String = if(lastUserLocation!=null) "Current location" else ""
         @JavascriptInterface fun pickRoutePoint(which: String) = runOnUiThread {
@@ -819,7 +865,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         if(photoLocationPicking && lastUserLocation==null) showMyLocation()
-        if(!photoLocationPicking && !routeMode && (!startupLocationRequested || lastUserLocation==null)) {
+        if(!photoLocationPicking && (!startupLocationRequested || lastUserLocation==null)) {
             startupLocationRequested=true
             showMyLocation()
         }
@@ -934,10 +980,12 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) { null }
     }
 
-    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView) {
+    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView,avoidObstacle: LatLng?=null) {
         val startQuery=start.text.toString().trim()
         val endQuery=end.text.toString().trim()
         if(startQuery.isBlank() || endQuery.isBlank()) { routeError("Enter a start and destination address."); return }
+        lastRouteStartQuery=startQuery; lastRouteEndQuery=endQuery
+        if(avoidObstacle==null) routeObstaclePoint=null
         button.isEnabled=false
         button.text="Finding…"
         worker.execute {
@@ -951,7 +999,8 @@ class MainActivity : ComponentActivity() {
                 if(from==null || to==null) error("Start or destination could not be found in the Philippines")
                 val pair="${from.longitude},${from.latitude}|${to.longitude},${to.latitude}"
                 val query=URLEncoder.encode(pair,"UTF-8")
-                val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=hiking-mountain&alternativeidx=0&format=geojson").openConnection() as HttpURLConnection).apply {
+                val noGo=avoidObstacle?.let { "&nogos=${URLEncoder.encode("${it.longitude},${it.latitude},80","UTF-8")}" }.orEmpty()
+                val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=hiking-mountain&alternativeidx=0&format=geojson$noGo").openConnection() as HttpURLConnection).apply {
                     connectTimeout=15_000; readTimeout=25_000; requestMethod="GET"
                 }
                 val response=try {
@@ -976,19 +1025,25 @@ class MainActivity : ComponentActivity() {
                     val minutes=kotlin.math.max(1,(length/1.2/60).toInt())
                     val summary="Walking route · ${minutes} min · ${"%.1f".format(Locale.US,length/1000)} km"
                     currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},'')",null)
-                    runDb({
-                        db.photoReports().firstOrNull { report ->
-                            val parts=report.location.split(",").mapNotNull { it.trim().toDoubleOrNull() }
-                            if(parts.size!=2) false else points.any { point ->
+                    worker.execute {
+                        val reports=runCatching {
+                            val rows=cloud.mapReports()
+                            (0 until rows.length()).map { rows.getJSONObject(it) }
+                        }.getOrDefault(emptyList())
+                        val obstacle=reports.firstOrNull { report ->
+                            val lat=report.optDouble("latitude"); val lon=report.optDouble("longitude")
+                            points.any { point ->
                                 val meters=FloatArray(1)
-                                Location.distanceBetween(parts[0],parts[1],point.latitude,point.longitude,meters)
-                                meters[0]<35f
+                                Location.distanceBetween(lat,lon,point.latitude,point.longitude,meters)
+                                meters[0]<50f
                             }
                         }
-                    }) { obstacle ->
-                        if(obstacle!=null && currentWebScreen=="Routes") {
-                            val warning="Possible obstacle along this route: ${obstacle.description}"
-                            currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},${JSONObject.quote(warning)})",null)
+                        runOnUiThread {
+                            if(currentWebScreen=="Routes") {
+                                routeObstaclePoint=obstacle?.let { LatLng(it.getDouble("latitude"),it.getDouble("longitude")) }
+                                val warning=obstacle?.let { "Possible obstacle: ${it.optString("description")}" }.orEmpty()
+                                currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},${JSONObject.quote(warning)})",null)
+                            }
                         }
                     }
                 }
@@ -996,7 +1051,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     toast("Could not find a walking route: ${e.message ?: "try again"}")
-                    routeError("Could not find a walking route. Check your connection and coordinates.")
+                    routeError("Could not find a walking route: ${e.message ?: "check your connection or addresses"}")
                 }
             }
         }
@@ -1023,7 +1078,8 @@ class MainActivity : ComponentActivity() {
 
     private fun requestCamera() {
         if(ContextCompat.checkSelfPermission(this,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED) {
-            capturedPhotos.clear(); cameraModeBatch=false; showCameraScreen()
+            if(!replacingReportPhotos) capturedPhotos.clear()
+            cameraModeBatch=false; showCameraScreen()
         } else requestPermissions(arrayOf(Manifest.permission.CAMERA),REQUEST_CAMERA_PERMISSION)
     }
 
@@ -1032,7 +1088,8 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode,permissions,grantResults)
         if(requestCode==REQUEST_CAMERA_PERMISSION) {
             if(grantResults.firstOrNull()==PackageManager.PERMISSION_GRANTED) {
-                capturedPhotos.clear(); cameraModeBatch=false; showCameraScreen()
+                if(!replacingReportPhotos) capturedPhotos.clear()
+                cameraModeBatch=false; showCameraScreen()
             } else toast("Camera access is needed to take a photo.")
         } else if(requestCode==REQUEST_LOCATION_PERMISSION) {
             if(grantResults.any { it==PackageManager.PERMISSION_GRANTED }) showMyLocation()

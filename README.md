@@ -4,7 +4,7 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 
 ## Status
 
-**Buildable MVP draft.** The prototype has Supabase account registration and email login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Signed-in users can view shared report markers, photos, and discussions, and post comments with optional photos. A route planner connects two points through BRouter. Accounts and report rankings are shared through Supabase. Apply [the shared map migration](supabase/04_shared_map_reports.sql) before using photo and comment sharing.
+**Buildable MVP draft.** The prototype has Supabase account registration and email login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Signed-in users can view shared report markers, photos, and discussions, and post comments with optional photos. The route planner searches places, accepts map pins, warns about shared reports near a route, and can request a detour through BRouter. Google and Apple sign-in require [provider setup](docs/SHARED_ACCOUNTS_SETUP.md). Apply [the shared map migration](supabase/04_shared_map_reports.sql) before using photo and comment sharing.
 
 ## Planned prototype
 

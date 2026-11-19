@@ -1,6 +1,7 @@
 package com.walkit.prototype.data
 
 import android.content.Context
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.walkit.prototype.BuildConfig
@@ -17,6 +18,7 @@ import java.net.URLEncoder
 
 /** Auth and profile requests use only the public project key and the user's token. */
 class CloudAccount(context: Context) {
+    companion object { const val AUTH_CALLBACK="walkit://auth/callback" }
     private val prefs=context.getSharedPreferences("walkit_cloud_session",Context.MODE_PRIVATE)
     private val base=BuildConfig.SUPABASE_URL.trimEnd('/')
     private val key=BuildConfig.SUPABASE_PUBLISHABLE_KEY
@@ -32,7 +34,7 @@ class CloudAccount(context: Context) {
         require(displayName.trim().length in 1..60) { "Name needs 1–60 characters." }
         val body=JSONObject().put("email",email.trim()).put("password",password)
             .put("data",JSONObject().put("username",username).put("display_name",displayName.trim()))
-        val response=request("POST","/auth/v1/signup",body,false)
+        val response=request("POST","/auth/v1/signup?redirect_to=${URLEncoder.encode(AUTH_CALLBACK,"UTF-8")}",body,false)
         return if(response.optString("access_token").isNotEmpty()) { saveSession(response); true } else false
     }
 
@@ -41,6 +43,31 @@ class CloudAccount(context: Context) {
             JSONObject().put("email",email.trim()).put("password",password),false)
         saveSession(response)
         return userId() ?: error("The server did not return a user ID.")
+    }
+
+    fun oauthUrl(provider: String): String {
+        require(provider=="google" || provider=="apple") { "Unsupported sign-in provider." }
+        return "$base/auth/v1/authorize?provider=$provider&redirect_to=${URLEncoder.encode(AUTH_CALLBACK,"UTF-8")}"
+    }
+
+    fun providerEnabled(provider: String): Boolean =
+        request("GET","/auth/v1/settings",null,false).optJSONObject("external")?.optBoolean(provider) == true
+
+    fun acceptAuthRedirect(uri: Uri) {
+        require(uri.scheme=="walkit" && uri.host=="auth" && uri.path=="/callback") { "Invalid sign-in return link." }
+        val params=Uri.parse("https://walkit.invalid/?${uri.fragment.orEmpty()}")
+        val redirectError=params.getQueryParameter("error_description") ?: uri.getQueryParameter("error_description")
+        if(!redirectError.isNullOrBlank()) throw IllegalArgumentException(redirectError)
+        val access=params.getQueryParameter("access_token") ?: error("The sign-in link did not include a session. Check the Supabase redirect settings.")
+        val refresh=params.getQueryParameter("refresh_token") ?: error("The sign-in link did not include a refresh token.")
+        val userRequest=Request.Builder().url("$base/auth/v1/user")
+            .header("apikey",key).header("Authorization","Bearer $access").get().build()
+        val user=http.newCall(userRequest).execute().use { response ->
+            if(!response.isSuccessful) error("The sign-in link could not be verified (${response.code}).")
+            JSONObject(response.body?.string().orEmpty())
+        }
+        saveSession(JSONObject().put("user",user).put("access_token",access)
+            .put("refresh_token",refresh).put("expires_in",params.getQueryParameter("expires_in")?.toLongOrNull() ?: 3600))
     }
 
     fun restore(): String? {

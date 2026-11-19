@@ -398,9 +398,9 @@
     if(lower==="cancel" && screenName==="Edit_Profile") { bridge.navigate("profile"); return; }
     if(lower==="forgot password?") { bridge.showMessage("Password reset is being prepared. Contact the team if you need access restored."); return; }
     if(lower==="this week") { bridge.showMessage("Weekly rankings are not available yet."); return; }
-    if(button.getAttribute("aria-label")?.includes("sign in with") || button.getAttribute("aria-label")?.includes("sign up with")) {
-      bridge.showMessage("Use email and password to continue."); return;
-    }
+    const providerLabel=button.getAttribute("aria-label")?.toLowerCase() || "";
+    if(providerLabel.includes("sign in with google") || providerLabel.includes("sign up with google")) { bridge.signInWithProvider("google"); return; }
+    if(providerLabel.includes("sign in with apple") || providerLabel.includes("sign up with apple")) { bridge.signInWithProvider("apple"); return; }
     if (lower === "pin route start on map" || lower === "pin route destination on map") {
       const start=document.getElementById("route-origin");
       const end=document.getElementById("route-destination");
@@ -460,11 +460,16 @@
       const origin = document.getElementById("route-origin");
       const destination = document.getElementById("route-destination");
       if (!origin || !destination || !origin.value.trim() || !destination.value.trim()) {
-        if (bridge) bridge.showMessage("Enter a start and destination as latitude, longitude.");
+        if (bridge) bridge.showMessage("Enter a start and destination place or address.");
         return;
       }
       document.getElementById("route-status").textContent = "Finding a walking route…";
       if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim());
+      return;
+    }
+    if (lower === "find detour") { if (bridge) bridge.planDetour(); return; }
+    if (screenName === "Routes" && ["wheelchair access", "fewer stairs", "smooth path", "well lit"].includes(lower)) {
+      if (bridge) bridge.showMessage("This route data cannot verify accessibility, stairs, surfaces, or lighting yet.");
       return;
     }
     if (lower === "done" || lower === "back to map" || lower === "home") { if (bridge) bridge.navigate("map"); return; }
@@ -526,10 +531,14 @@
     const details=document.getElementById("route-summary");
     if(status) status.textContent=warning || "Walking route is ready on the map";
     if(details) details.textContent=summary;
+    const detour=document.getElementById("route-detour");
+    if(detour) detour.style.display=warning ? "flex" : "none";
   };
   window.walkItRouteError = function(message) {
     const status=document.getElementById("route-status");
     if(status) status.textContent=message;
+    const detour=document.getElementById("route-detour");
+    if(detour) detour.style.display="none";
   };
   window.walkItSetFlash = function(enabled) {
     const flash = document.querySelector('[aria-label="Flash"]');
