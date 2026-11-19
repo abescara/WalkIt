@@ -1615,49 +1615,9 @@ class MainActivity : ComponentActivity() {
             setPadding(0,dp(5),0,dp(2))
         })
 
-        val reactions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
-        val reactionScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(reactions) }
-        sheet.addView(reactionScroll,LinearLayout.LayoutParams(-1,dp(48)).apply { topMargin=dp(8) })
-        var reportReactionRows=org.json.JSONArray()
         var commentReactionRows=org.json.JSONArray()
         var reactionsAvailable=false
         val reactionIcons=linkedMapOf("like" to "👍", "love" to "❤️", "care" to "🥰", "haha" to "😆", "wow" to "😮", "sad" to "😢", "angry" to "😠")
-        fun renderReportReactions() {
-            reactions.removeAllViews()
-            if(report.cloudId==null || !reactionsAvailable) {
-                reactions.addView(TextView(this).apply {
-                    text=if(report.cloudId==null) "Reactions will appear when this report is shared" else "Reactions need the database update"
-                    textSize=12f; setTextColor(Color.GRAY)
-                })
-                return
-            }
-            val rows=(0 until reportReactionRows.length()).mapNotNull(reportReactionRows::optJSONObject)
-            val mine=rows.firstOrNull { it.optString("owner_id")==cloud.userId() }?.optString("kind")
-            reactionIcons.forEach { (kind,icon) ->
-                val count=rows.count { it.optString("kind")==kind }
-                val button=TextView(this).apply {
-                    text="$icon${if(count>0) " $count" else ""}"
-                    textSize=18f; gravity=Gravity.CENTER; contentDescription="$kind reaction, $count"
-                    setPadding(dp(9),dp(5),dp(9),dp(5))
-                    background=rounded(if(mine==kind) Color.rgb(219,234,254) else Color.rgb(243,244,246),18)
-                    setOnClickListener {
-                        isEnabled=false
-                        sharedWorker.execute {
-                            val result=runCatching {
-                                cloud.setReportReaction(report.cloudId,if(mine==kind) null else kind)
-                                cloud.reportReactions(report.cloudId)
-                            }
-                            runOnUiThread {
-                                result.fold({ reportReactionRows=it; renderReportReactions() },
-                                    { toast(it.message ?: "Could not save reaction."); isEnabled=true })
-                            }
-                        }
-                    }
-                }
-                reactions.addView(button,LinearLayout.LayoutParams(-2,dp(38)).apply { rightMargin=dp(7) })
-            }
-        }
-        renderReportReactions()
 
         sheet.addView(TextView(this).apply {
             text="Discussion"; textSize=17f; setTextColor(Color.rgb(17,24,39)); setTypeface(null,android.graphics.Typeface.BOLD)
@@ -1723,31 +1683,23 @@ class MainActivity : ComponentActivity() {
                 item.cloudId?.takeIf { reactionsAvailable }?.let { commentId ->
                     val commentLikes=reactionItems.filter { it.optString("comment_id")==commentId }
                     val mineKind=commentLikes.firstOrNull { it.optString("owner_id")==cloud.userId() }?.optString("kind")
-                    val likeButton=TextView(this).apply {
-                        text="${reactionIcons[mineKind] ?: "Like"} ${if(commentLikes.isNotEmpty()) commentLikes.size else ""}"
+                    val reactButton=TextView(this).apply {
+                        text="${reactionIcons[mineKind] ?: "React"} ${if(commentLikes.isNotEmpty()) commentLikes.size else ""}"
                         textSize=12f; setTextColor(if(mineKind!=null) Color.rgb(37,99,235) else Color.DKGRAY)
                         setPadding(dp(13),dp(5),dp(6),dp(5)); setOnClickListener {
-                            isEnabled=false
-                            sharedWorker.execute {
-                                val result=runCatching { cloud.setCommentReaction(commentId,if(mineKind=="like") null else "like") }
-                                runOnUiThread { result.fold({ reloadComments() },{ toast(it.message ?: "Could not react."); isEnabled=true }) }
-                            }
-                        }
-                    }
-                    likeButton.setOnLongClickListener {
-                        android.widget.PopupMenu(this,likeButton).apply {
+                            android.widget.PopupMenu(this@MainActivity,this).apply {
                             reactionIcons.forEach { (kind,icon) -> menu.add("$icon ${kind.replaceFirstChar(Char::uppercaseChar)}").setOnMenuItemClickListener {
                                 sharedWorker.execute {
-                                    val result=runCatching { cloud.setCommentReaction(commentId,kind) }
+                                    val result=runCatching { cloud.setCommentReaction(commentId,if(mineKind==kind) null else kind) }
                                     runOnUiThread { result.fold({ reloadComments() },{ toast(it.message ?: "Could not react.") }) }
                                 }
                                 true
                             } }
                             show()
+                            }
                         }
-                        true
                     }
-                    actions.addView(likeButton)
+                    actions.addView(reactButton)
                     actions.addView(TextView(this).apply {
                         text="Reply"; textSize=12f; setTextColor(Color.DKGRAY)
                         setPadding(dp(9),dp(5),dp(6),dp(5)); setOnClickListener {
@@ -1775,7 +1727,6 @@ class MainActivity : ComponentActivity() {
             }
             sharedWorker.execute {
                 val pending=if(report.id>0) db.pendingPhotoComments(report.id) else emptyList()
-                val reportReactionsResult=runCatching { cloud.reportReactions(report.cloudId) }
                 val commentReactionsResult=runCatching { cloud.commentReactions(report.cloudId) }
                 val remote=runCatching {
                     val rows=cloud.mapComments(report.cloudId)
@@ -1794,10 +1745,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 runOnUiThread {
-                    reactionsAvailable=reportReactionsResult.isSuccess
-                    reportReactionRows=reportReactionsResult.getOrDefault(org.json.JSONArray())
+                    reactionsAvailable=commentReactionsResult.isSuccess
                     commentReactionRows=commentReactionsResult.getOrDefault(org.json.JSONArray())
-                    renderReportReactions()
                     if(remote.isFailure) toast("Could not refresh shared comments.")
                     renderComments((remote.getOrDefault(emptyList())+pending).sortedBy { it.createdAt })
                 }
