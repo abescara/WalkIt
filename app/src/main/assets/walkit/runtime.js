@@ -25,10 +25,11 @@
   }
 
   function setSelected(button, peers) {
+    const darkReport = screenName === "Report" && fileName.endsWith("_Dark");
     peers.forEach((peer) => {
-      peer.style.background = peer === button ? "#2b2b2b" : "#fff";
-      peer.style.color = peer === button ? "#fff" : "#333";
-      peer.style.borderColor = peer === button ? "#2b2b2b" : "#d0d0d0";
+      peer.style.background = peer === button ? (darkReport ? "#f2f2f2" : "#2b2b2b") : (darkReport ? "#1e1e1e" : "#fff");
+      peer.style.color = peer === button ? (darkReport ? "#111" : "#fff") : (darkReport ? "#e0e0e0" : "#333");
+      peer.style.borderColor = peer === button ? (darkReport ? "#f2f2f2" : "#2b2b2b") : (darkReport ? "#3a3a3a" : "#d0d0d0");
       peer.setAttribute("aria-pressed", peer === button ? "true" : "false");
     });
   }
@@ -55,6 +56,8 @@
       const detailField = document.getElementById("report-details");
       if (detailField && draft.details) detailField.value = draft.details;
       if (draft.category) window.walkItCategory = draft.category;
+      const chips=Array.from(document.querySelectorAll("button")).filter(item=>["broken sidewalk","blocked path","no ramp","poor lighting"].includes(labelFor(item).toLowerCase()));
+      setSelected(chips.find(item=>labelFor(item)===window.walkItCategory) || chips[0],chips);
       const photos = JSON.parse(bridge.getDraftPhotos());
       const image = document.getElementById("captured-preview");
       if (image && photos.length) image.src = "file://" + photos[0];
@@ -438,7 +441,8 @@
       if (bridge) bridge.navigate(lower);
       return;
     }
-    if (lower === "report an issue" || lower === "take photo" || lower === "retake") {
+    if (screenName === "Report" && lower === "retake") { if (bridge) bridge.retakeReportPhoto(); return; }
+    if (lower === "report an issue" || lower === "take photo") {
       if (bridge) bridge.openCamera();
       return;
     }
@@ -479,7 +483,6 @@
     if (screenName === "Report" && lower === "place report on map") {
       const detail = document.getElementById("report-details");
       if (!detail || !detail.value.trim()) { if (detail) { detail.focus(); detail.placeholder = "Add a short description first"; } return; }
-      clearDraft();
       if (bridge) bridge.submitReport(window.walkItCategory || "Broken sidewalk", detail.value.trim());
       return;
     }

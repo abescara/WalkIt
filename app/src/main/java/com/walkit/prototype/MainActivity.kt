@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
     private var transitionCover: ImageView? = null
     private var returnToReportAfterPicker = false
     private var darkThemeEnabled = false
+    private var replacingReportPhotos = false
     private var lastSubmittedPhotos = emptyList<String>()
     private var lastSubmittedDescription = ""
     private var lastSubmittedLocation = ""
@@ -93,6 +94,8 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) { null }
             }
             runOnUiThread {
+                if(replacingReportPhotos && imported.isNotEmpty()) capturedPhotos.clear()
+                if(imported.isNotEmpty()) replacingReportPhotos=false
                 capturedPhotos.addAll(imported)
                 if(currentWebScreen=="Report") currentWebView?.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
                 else if(currentWebScreen=="Camera") finishCamera(true)
@@ -507,6 +510,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         @JavascriptInterface fun openCamera() = runOnUiThread { requestCamera() }
+        @JavascriptInterface fun retakeReportPhoto() = runOnUiThread {
+            replacingReportPhotos=true
+            requestCamera()
+        }
         @JavascriptInterface fun closeCamera() = runOnUiThread { finishCamera(false) }
         @JavascriptInterface fun captureCameraPhoto() = runOnUiThread {
             val done=cameraUiDone; val shutter=cameraUiShutter
@@ -588,6 +595,7 @@ class MainActivity : ComponentActivity() {
                 lastSubmittedPhotos=paths
                 lastSubmittedDescription=description
                 lastSubmittedLocation=location
+                currentWebView?.evaluateJavascript("window.walkItClearDraft && window.walkItClearDraft()",null)
                 capturedPhotos.clear()
                 showWebScreen("Report_Preview")
                 syncCloudReports(owner)
@@ -1082,6 +1090,7 @@ class MainActivity : ComponentActivity() {
                 if(!file.exists() || file.length()==0L) {
                     file.delete(); toast("The camera returned an empty photo. Please try again."); return
                 }
+                if(replacingReportPhotos) { capturedPhotos.clear(); replacingReportPhotos=false }
                 capturedPhotos.add(file.absolutePath)
                 if(cameraModeBatch) {
                     done.text="Done ${capturedPhotos.size}"; done.visibility=View.VISIBLE
@@ -1215,6 +1224,7 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor=Color.rgb(248,250,252); window.navigationBarColor=Color.WHITE
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         if(keepPhotos && capturedPhotos.isNotEmpty()) showPhotoLocationPicker()
+        else if(replacingReportPhotos) { replacingReportPhotos=false; showWebScreen("Report") }
         else { capturedPhotos.clear(); showTab(Tab.MAP) }
     }
 
