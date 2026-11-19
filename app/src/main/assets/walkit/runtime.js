@@ -259,6 +259,64 @@
   }
 
   const forum={posts:[],selected:null,feed:null,mode:"feed",dark:fileName.endsWith("_Dark")};
+  const friends={list:null,dark:fileName.endsWith("_Dark")};
+  function renderFriends() {
+    if(!bridge || screenName!=="Friends") return;
+    const canvas=document.querySelector(".wrap > div");
+    const search=Array.from(canvas.children).find(item=>item.style.top==="164px");
+    friends.list=Array.from(canvas.children).find(item=>item.style.top==="224px");
+    if(!search || !friends.list) return;
+    search.innerHTML=`<input id="friend-username" aria-label="Friend username" placeholder="Add friend by username" autocapitalize="none" style="min-width:0;flex:1;border:0;outline:0;background:transparent;color:inherit;font:14px Inter,sans-serif"><button id="friend-add" style="height:38px;padding:0 18px;border-radius:19px;border:0;background:#5fbe2a;color:#10300a;font-size:13px;font-weight:700">Add</button>`;
+    friends.list.style.bottom="84px"; friends.list.style.overflowY="auto";
+    friends.list.innerHTML='<div style="padding:18px;opacity:.7">Loading friends…</div>';
+    bridge.loadFriends();
+  }
+  window.walkItFriends=function(payload) {
+    if(!friends.list) return;
+    let rows; try { rows=JSON.parse(payload); } catch (_) { rows={error:"Could not load friends."}; }
+    if(rows.error) { friends.list.textContent=rows.error.includes("friendships")?"Friends need the database update before they can be used.":rows.error; return; }
+    const self=bridge.getCurrentUserId();
+    const groups=[
+      ["Requests to respond to",rows.filter(item=>item.status==="pending" && item.addressee_id===self)],
+      ["Requests sent",rows.filter(item=>item.status==="pending" && item.requester_id===self)],
+      ["Friends",rows.filter(item=>item.status==="accepted")]
+    ];
+    friends.list.innerHTML=groups.map(([heading,items])=>`<div style="font-size:13px;font-weight:700;opacity:.75;margin:14px 0 6px">${heading} · ${items.length}</div>${items.length?items.map(item=>{
+      const other=item.requester_id===self?item.addressee:item.requester;
+      const name=escapeHtml(other?.display_name||other?.username||"Walker");
+      const username=escapeHtml(other?.username||"");
+      const actions=item.status==="accepted"?`<button data-friend-action="remove" data-friend-id="${item.id}">Remove</button>`:item.addressee_id===self?`<button data-friend-action="accept" data-friend-id="${item.id}">Accept</button><button data-friend-action="remove" data-friend-id="${item.id}">Decline</button>`:`<button data-friend-action="remove" data-friend-id="${item.id}">Cancel</button>`;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid ${friends.dark?'#444':'#eee'}"><div style="width:42px;height:42px;flex:none;border-radius:50%;background:#5fbe2a;color:#fff;display:grid;place-items:center;font-weight:700">${name.slice(0,1).toUpperCase()}</div><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis">${name}</div><div style="font-size:12px;opacity:.65">@${username}</div></div><div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${actions}</div></div>`;
+    }).join(""):'<div style="font-size:12px;opacity:.6;padding:8px 0">None yet</div>'}`).join("");
+    friends.list.querySelectorAll('[data-friend-action]').forEach(button=>button.style.cssText+=`;min-height:38px;padding:0 10px;border-radius:19px;border:1px solid ${friends.dark?'#555':'#ddd'};background:${button.dataset.friendAction==='accept'?'#5fbe2a':friends.dark?'#242424':'#fff'};color:${button.dataset.friendAction==='accept'?'#10300a':'inherit'};font-size:12px`);
+  };
+  window.walkItFriendAction=function(payload) {
+    const result=JSON.parse(payload);
+    const add=document.getElementById("friend-add"); if(add) add.disabled=false;
+    if(result.error) { bridge.showMessage(result.error); return; }
+    const field=document.getElementById("friend-username"); if(field) field.value="";
+    bridge.loadFriends();
+  };
+  function showLocalUpdates() {
+    if(!forum.feed) return;
+    localStorage.setItem("walkit-community-tab","updates");
+    forum.mode="updates";
+    forum.feed.style.top="164px";
+    const create=Array.from(document.querySelectorAll("button")).find(item=>labelFor(item).toLowerCase()==="create a forum");
+    if(create) create.style.display="none";
+    const tabs=Array.from(document.querySelectorAll("button")).filter(item=>["forum","local updates","friends"].includes(labelFor(item).toLowerCase()));
+    const selected=tabs.find(item=>labelFor(item).toLowerCase()==="local updates"); if(selected) setSelected(selected,tabs);
+    forum.feed.innerHTML='<div style="padding:24px;text-align:center;opacity:.7">Loading local updates…</div>';
+    bridge.loadLocalUpdates();
+  }
+  window.walkItLocalUpdates=function(payload) {
+    if(forum.mode!=="updates" || !forum.feed) return;
+    let data; try { data=JSON.parse(payload); } catch (_) { data={error:"Could not load updates."}; }
+    if(data.error) { forum.feed.textContent=data.error; return; }
+    const rows=data.reports||[];
+    forum.feed.innerHTML=`<div style="font-size:12px;opacity:.7;margin-bottom:12px">${data.nearby?'Reports within 10 km of your location':'Recent reports across the Philippines'}</div>`+
+      (rows.length?rows.map(item=>`<div style="padding:14px;margin-bottom:12px;border:1px solid ${forum.dark?'#444':'#e3e3e3'};border-radius:18px;background:${forum.dark?'#242424':'#fff'}"><div style="font-size:12px;opacity:.65">${escapeHtml(new Date(item.created_at).toLocaleString())}${item.distance_m!=null?' · '+(item.distance_m/1000).toFixed(1)+' km away':''}</div><div style="font-size:15px;font-weight:700;margin:8px 0">${escapeHtml(item.category||'Map report')}</div><div style="font-size:13px;line-height:1.45">${escapeHtml(item.description||'')}</div><button data-report-lat="${Number(item.latitude)}" data-report-lon="${Number(item.longitude)}" style="margin-top:12px;border:0;background:none;color:#5fbe2a;font-size:13px;font-weight:700;padding:8px 0">Show on map →</button></div>`).join(""):'<div style="padding:20px;text-align:center;opacity:.7">No reports here yet. Check back later or add one on the map.</div>');
+  };
   function forumCard(post) {
     const author=escapeHtml(post.display_name||post.username||"Walker");
     const when=new Date(post.created_at).toLocaleString();
@@ -280,7 +338,8 @@
     forum.feed.style.padding="0 16px 16px";
     forum.feed.style.boxSizing="border-box";
     forum.feed.innerHTML='<div style="padding:24px;text-align:center;opacity:.7">Loading discussions…</div>';
-    bridge.loadForumPosts();
+    if(localStorage.getItem("walkit-community-tab")==="updates") showLocalUpdates();
+    else bridge.loadForumPosts();
   }
   function forumError(message) {
     return /forum_(feed|posts|replies)|schema cache/i.test(message||"")
@@ -347,6 +406,18 @@
     const label = labelFor(button);
     const lower = label.toLowerCase();
     if(screenName==="Community") {
+      if(lower==="local updates") { showLocalUpdates(); return; }
+      if(lower==="forum") {
+        localStorage.setItem("walkit-community-tab","forum");
+        forum.feed.style.top="228px";
+        const create=Array.from(document.querySelectorAll("button")).find(item=>labelFor(item).toLowerCase()==="create a forum");
+        if(create) create.style.display="flex";
+        const tabs=Array.from(document.querySelectorAll("button")).filter(item=>["forum","local updates","friends"].includes(labelFor(item).toLowerCase()));
+        setSelected(button,tabs); renderForumFeed(); return;
+      }
+      if(lower==="friends") { bridge.navigate("friends"); return; }
+      const reportButton=button.closest('[data-report-lat]');
+      if(reportButton) { bridge.showReportOnMap(Number(reportButton.dataset.reportLat),Number(reportButton.dataset.reportLon)); return; }
       const postId=Number(button.getAttribute("data-forum-post"));
       if(postId>0) { const post=forum.posts.find(item=>Number(item.id)===postId); if(post) showForumThread(post); return; }
       if(button.id==="forum-back") { renderForumFeed(); return; }
@@ -364,7 +435,18 @@
         button.disabled=true; bridge.createForumReply(Number(forum.selected?.id),body); return;
       }
       if(lower==="forum") { renderForumFeed(); return; }
-      if(lower==="local updates") { bridge.showMessage("Local updates are not available yet. Forum discussions are open to all WalkIt users."); return; }
+    }
+    if(screenName==="Friends") {
+      if(lower==="forum" || lower==="local updates") {
+        localStorage.setItem("walkit-community-tab",lower==="forum"?"forum":"updates");
+        bridge.navigate("community"); return;
+      }
+      if(button.id==="friend-add") {
+        const name=document.getElementById("friend-username")?.value.trim()||"";
+        if(!name) { bridge.showMessage("Enter a username to add a friend."); return; }
+        button.disabled=true; bridge.sendFriendRequest(name); return;
+      }
+      if(button.dataset.friendAction) { button.disabled=true; bridge.updateFriendRequest(button.dataset.friendId,button.dataset.friendAction); return; }
     }
     if(button.id==="open-signup") { bridge.navigate("signup"); return; }
     if(button.id==="open-login") { bridge.navigate("login"); return; }
@@ -559,6 +641,7 @@
   renderAccountPage();
   renderRewards();
   renderCommunity();
+  renderFriends();
   hydrateReport();
   hydratePreview();
   if(screenName === "Routes" && bridge) {

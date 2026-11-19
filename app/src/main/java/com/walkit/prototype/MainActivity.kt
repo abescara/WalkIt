@@ -75,8 +75,6 @@ class MainActivity : ComponentActivity() {
     private var photoDialog: Dialog? = null
     private var currentWebView: WebView? = null
     private var currentWebScreen: String? = null
-    private var transitionFrame: Bitmap? = null
-    private var transitionCover: ImageView? = null
     private var returnToReportAfterPicker = false
     private var darkThemeEnabled = false
     private var replacingReportPhotos = false
@@ -161,6 +159,7 @@ class MainActivity : ComponentActivity() {
     private var locationRequestInFlight = false
     private var lastUserLocation: LatLng? = null
     private var userLocationMarker: org.maplibre.android.annotations.Marker? = null
+    private var mapParked = false
     private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
     private var mapTarget = LatLng(14.5995,120.9842)
     private var mapZoom = 14.0
@@ -184,6 +183,7 @@ class MainActivity : ComponentActivity() {
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>, val cloudPhotoPaths: List<String> = emptyList())
     private val displayedCloudReports = mutableSetOf<String>()
     private val remoteMarkers = mutableMapOf<String,org.maplibre.android.annotations.Marker>()
+    private val queuedSharedPhotos = mutableSetOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -247,22 +247,26 @@ class MainActivity : ComponentActivity() {
 
     private fun showTab(tab: Tab) {
         if(userId==null) { showAuthScreen("Login"); return }
-        captureTransitionFrame()
-        selectedTab=tab
-        if (tab!=Tab.MAP || currentMap!=null) {
-            currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
-            disposeMap()
+        if(tab==selectedTab && ((tab==Tab.MAP && currentWebScreen=="Main" && !pickingPhotoLocation) ||
+                (tab==Tab.ROUTES && currentWebScreen=="Routes") ||
+                (tab==Tab.COMMUNITY && currentWebScreen=="Community") ||
+                (tab==Tab.REWARDS && currentWebScreen=="Rewards") ||
+                (tab==Tab.PROFILE && currentWebScreen=="Profile"))) return
+        when(tab) {
+            Tab.COMMUNITY,Tab.FORUMS -> { showWebScreen("Community"); return }
+            Tab.REWARDS -> { showWebScreen("Rewards"); return }
+            Tab.PROFILE -> { showWebScreen("Profile"); return }
+            else -> Unit
         }
+        selectedTab=tab
+        parkMap()
         clearFrontendView()
         screen.removeAllViews()
         when (tab) {
             Tab.MAP -> showMapScreen()
-            Tab.COMMUNITY, Tab.FORUMS -> showWebScreen("Community")
             Tab.ROUTES -> showMapScreen(routeMode=true)
-            Tab.REWARDS -> showWebScreen("Rewards")
-            Tab.PROFILE -> showWebScreen("Profile")
+            else -> Unit
         }
-        showTransitionFrame()
     }
 
     private fun showEmptyScreen(title: String) {
@@ -270,11 +274,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showWebScreen(page: String) {
-        captureTransitionFrame()
-        if(currentMap!=null) {
-            currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
-            disposeMap()
-        }
+        parkMap()
         clearFrontendView()
         screen.removeAllViews()
         pickingPhotoLocation=false
@@ -288,7 +288,6 @@ class MainActivity : ComponentActivity() {
         screen.setBackgroundColor(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
         val web=makeFrontendWebView(page)
         screen.addView(web,FrameLayout.LayoutParams(-1,-1))
-        showTransitionFrame()
     }
 
     private fun showAuthScreen(page: String) {
@@ -325,7 +324,6 @@ class MainActivity : ComponentActivity() {
                     if(currentWebView===view) {
                         view.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
                         view.evaluateJavascript("window.walkItRefreshPreview && window.walkItRefreshPreview()",null)
-                        view.postDelayed({ dismissTransitionFrame() },350)
                     }
                 }
             }
@@ -349,36 +347,6 @@ class MainActivity : ComponentActivity() {
         currentWebScreen=null
     }
 
-    private fun captureTransitionFrame() {
-        if(transitionFrame!=null || screen.width<=0 || screen.height<=0 || screen.childCount==0) return
-        try {
-            transitionFrame=Bitmap.createBitmap(screen.width,screen.height,Bitmap.Config.RGB_565).also {
-                screen.draw(Canvas(it))
-            }
-        } catch (_: Exception) { transitionFrame=null }
-    }
-
-    private fun showTransitionFrame() {
-        if(transitionCover?.parent===screen) return
-        transitionCover=null
-        val frame=transitionFrame ?: return
-        transitionCover=ImageView(this).apply {
-            setImageBitmap(frame)
-            scaleType=ImageView.ScaleType.FIT_XY
-            isClickable=true
-        }
-        screen.addView(transitionCover,FrameLayout.LayoutParams(-1,-1))
-        screen.postDelayed({ dismissTransitionFrame() },1500)
-    }
-
-    private fun dismissTransitionFrame() {
-        val cover=transitionCover ?: return
-        cover.animate().alpha(0f).setDuration(150).withEndAction {
-            screen.removeView(cover)
-            if(transitionCover===cover) transitionCover=null
-            transitionFrame?.recycle(); transitionFrame=null
-        }.start()
-    }
 
     private fun forwardMapGesture(web: WebView,map: MapView,event: MotionEvent): Boolean {
         if(event.actionMasked==MotionEvent.ACTION_DOWN) {
@@ -479,8 +447,64 @@ class MainActivity : ComponentActivity() {
         }.toString()
         @JavascriptInterface fun getCurrentUserId(): String = cloud.userId() ?: ""
         private fun sendForumResult(web: WebView?,callback: String,payload: String) = runOnUiThread {
-            if(web===currentWebView && currentWebScreen=="Community")
+            if(web===currentWebView && (currentWebScreen=="Community" || currentWebScreen=="Friends"))
                 web?.evaluateJavascript("window.$callback && window.$callback(${JSONObject.quote(payload)})",null)
+        }
+        @JavascriptInterface fun loadFriends() {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.friendships().toString() }
+                    .getOrElse { JSONObject().put("error",it.message ?: "Could not load friends.").toString() }
+                sendForumResult(web,"walkItFriends",result)
+            }
+        }
+        @JavascriptInterface fun sendFriendRequest(username: String) {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching { cloud.sendFriendRequest(username) }
+                    .fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not send request.") })
+                sendForumResult(web,"walkItFriendAction",result.toString())
+            }
+        }
+        @JavascriptInterface fun updateFriendRequest(id: String,action: String) {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching {
+                    if(action=="accept") cloud.acceptFriendRequest(id)
+                    else if(action=="remove") cloud.removeFriendship(id)
+                    else error("Unknown friend action.")
+                }.fold({ JSONObject().put("ok",true) },{ JSONObject().put("error",it.message ?: "Could not update request.") })
+                sendForumResult(web,"walkItFriendAction",result.toString())
+            }
+        }
+        @JavascriptInterface fun loadLocalUpdates() {
+            val web=currentWebView
+            worker.execute {
+                val result=runCatching {
+                    val rows=cloud.mapReports()
+                    val near=lastUserLocation
+                    val updates=org.json.JSONArray()
+                    for(index in 0 until rows.length()) {
+                        val item=rows.getJSONObject(index)
+                        if(near!=null) {
+                            val meters=FloatArray(1)
+                            Location.distanceBetween(near.latitude,near.longitude,item.getDouble("latitude"),item.getDouble("longitude"),meters)
+                            if(meters[0]>10_000f) continue
+                            item.put("distance_m",meters[0].toDouble())
+                        }
+                        updates.put(item)
+                    }
+                    JSONObject().put("nearby",near!=null).put("reports",updates).toString()
+                }.getOrElse { JSONObject().put("error",it.message ?: "Could not load updates.").toString() }
+                sendForumResult(web,"walkItLocalUpdates",result)
+            }
+        }
+        @JavascriptInterface fun showReportOnMap(latitude: Double,longitude: Double) = runOnUiThread {
+            if(latitude !in 4.0..21.8 || longitude !in 116.0..127.0) return@runOnUiThread
+            showTab(Tab.MAP)
+            val target=LatLng(latitude,longitude)
+            mapTarget=target; mapZoom=17.0
+            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(target,17.0),500)
         }
         @JavascriptInterface fun loadForumPosts() {
             val web=currentWebView
@@ -756,7 +780,7 @@ class MainActivity : ComponentActivity() {
         if(!returnToReportAfterPicker && lastUserLocation!=null && pickingRoutePoint==null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
         pickingPhotoLocation=true
         routePlannerVisible=false
-        disposeMap()
+        parkMap()
         clearFrontendView()
         screen.removeAllViews()
         selectedTab=Tab.MAP
@@ -782,9 +806,15 @@ class MainActivity : ComponentActivity() {
 
     private fun showMapScreen(photoLocationPicking: Boolean = false, routeMode: Boolean = false) {
         screen.setBackgroundColor(Color.WHITE)
-        val map=MapView(this)
+        val reused=mapView!=null
+        val map=mapView ?: MapView(this)
         mapView=map
+        (map.parent as? android.view.ViewGroup)?.removeView(map)
         screen.addView(map,FrameLayout.LayoutParams(-1,-1))
+        if(reused && mapParked) { map.onStart(); map.onResume() }
+        mapParked=false
+        if(reused && currentMap!=null) currentMap?.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
+        if(reused) screen.post { currentMap?.let(::hydrateVisiblePhotoMarkers) }
 
         if(photoLocationPicking) {
             val locate=TextView(this).apply {
@@ -842,10 +872,11 @@ class MainActivity : ComponentActivity() {
 
         }
 
-        map.onCreate(null)
-        map.onStart()
-        map.onResume()
-        map.getMapAsync { maplibreMap ->
+        if(!reused) {
+          map.onCreate(null)
+          map.onStart()
+          map.onResume()
+          map.getMapAsync { maplibreMap ->
             if(mapView!==map) return@getMapAsync
             currentMap=maplibreMap
             maplibreMap.setStyle("https://styles.maptoolkit.org/street.json") {
@@ -860,9 +891,11 @@ class MainActivity : ComponentActivity() {
                     photoMarkerDetails[marker.id]?.let { showPhotoDetails(it) }
                     true
                 }
+                maplibreMap.addOnCameraIdleListener { hydrateVisiblePhotoMarkers(maplibreMap) }
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
                 loadSharedReports(maplibreMap)
             }
+          }
         }
         if(photoLocationPicking && lastUserLocation==null) showMyLocation()
         if(!photoLocationPicking && (!startupLocationRequested || lastUserLocation==null)) {
@@ -1102,7 +1135,7 @@ class MainActivity : ComponentActivity() {
         cameraUsesFrontLens=false
         cameraFlashEnabled=false
         currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
-        disposeMap(); clearFrontendView(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
+        parkMap(); clearFrontendView(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
         window.statusBarColor=Color.BLACK; window.navigationBarColor=Color.BLACK
         window.decorView.systemUiVisibility=0
         val preview=PreviewView(this).apply { scaleType=PreviewView.ScaleType.FILL_CENTER }
@@ -1421,20 +1454,39 @@ class MainActivity : ComponentActivity() {
                         if(currentMap===map && currentStyleReady && displayedCloudReports.add(cloudId))
                             addPhotoMarkers(report,photoPaths)
                     }
-                    val firstPath=photoPaths.firstOrNull() ?: continue
-                    sharedWorker.execute {
-                        val cached=cachedSharedPhoto(firstPath) ?: return@execute
-                        runOnUiThread {
-                            if(currentMap!==map || !currentStyleReady) return@runOnUiThread
-                            val previous=remoteMarkers.remove(cloudId) ?: return@runOnUiThread
-                            map.removeMarker(previous)
-                            photoMarkerDetails.remove(previous.id)
-                            addPhotoMarkers(report.copy(photos=listOf(cached)),photoPaths)
-                        }
-                    }
                 }
+                runOnUiThread { if(currentMap===map) hydrateVisiblePhotoMarkers(map) }
             }
             if(result.isFailure) runOnUiThread { toast("Could not refresh shared map reports. Check your connection.") }
+        }
+    }
+
+    private fun hydrateVisiblePhotoMarkers(map: org.maplibre.android.maps.MapLibreMap) {
+        if(currentMap!==map || !currentStyleReady || mapParked) return
+        val bounds=map.projection.visibleRegion.latLngBounds
+        val center=map.cameraPosition.target ?: mapTarget
+        remoteMarkers.toMap().entries.filter {
+            bounds.contains(it.value.position) && photoMarkerDetails[it.value.id]?.photos?.isEmpty()==true
+        }
+            .sortedBy { (_,marker) ->
+                val point=marker.position
+                kotlin.math.abs(point.latitude-center.latitude)+kotlin.math.abs(point.longitude-center.longitude)
+            }.take(12).forEach { (cloudId,marker) ->
+            val detail=photoMarkerDetails[marker.id] ?: return@forEach
+            if(detail.photos.isNotEmpty()) return@forEach
+            val path=detail.cloudPhotoPaths.firstOrNull() ?: return@forEach
+            if(!queuedSharedPhotos.add(path)) return@forEach
+            sharedWorker.execute {
+                val cached=cachedSharedPhoto(path)
+                runOnUiThread {
+                    queuedSharedPhotos.remove(path)
+                    if(cached==null || currentMap!==map || !currentStyleReady) return@runOnUiThread
+                    val previous=remoteMarkers.remove(cloudId) ?: return@runOnUiThread
+                    map.removeMarker(previous)
+                    photoMarkerDetails.remove(previous.id)
+                    addPhotoMarkers(detail.report.copy(photos=listOf(cached)),detail.cloudPhotoPaths)
+                }
+            }
         }
     }
 
@@ -1445,7 +1497,8 @@ class MainActivity : ComponentActivity() {
         if(coordinates.size!=2) return
         val point=LatLng(coordinates[0],coordinates[1])
         val photos=report.photos.filter { File(it).exists() }
-        val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it) } ?: makePhotoPlaceholder()
+        val markerSize=if(report.id<0) 42 else 48
+        val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it,markerSize) } ?: makePhotoPlaceholder(markerSize)
         val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
         val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
         photoMarkerDetails[marker.id]=PhotoMarkerDetail(report,photos,cloudPhotoPaths)
@@ -1466,14 +1519,14 @@ class MainActivity : ComponentActivity() {
             gravity=Gravity.CENTER_HORIZONTAL; bottomMargin=dp(14)
         })
         val hero=ImageView(this).apply {
-            scaleType=ImageView.ScaleType.CENTER_CROP
+            scaleType=ImageView.ScaleType.FIT_CENTER
             background=rounded(Color.rgb(229,231,235),18)
             clipToOutline=true
         }
         val firstPhoto=detail.photos.firstOrNull()
         if(firstPhoto!=null) hero.setImageBitmap(loadPhotoPreview(firstPhoto,dp(420)))
         else hero.setImageBitmap(makePhotoPlaceholder())
-        sheet.addView(hero,LinearLayout.LayoutParams(-1,dp(180)).apply { bottomMargin=dp(10) })
+        sheet.addView(hero,LinearLayout.LayoutParams(-1,dp(150)).apply { bottomMargin=dp(10) })
 
         val strip=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
         fun showPhotoStrip(paths: List<String>) {
@@ -1647,7 +1700,7 @@ class MainActivity : ComponentActivity() {
         dialog.setContentView(sheet)
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout(-1,(resources.displayMetrics.heightPixels*0.88f).toInt())
+            setLayout(-1,(resources.displayMetrics.heightPixels*0.72f).toInt())
             setGravity(Gravity.BOTTOM)
             addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
@@ -1664,7 +1717,7 @@ class MainActivity : ComponentActivity() {
                 photosScroll.visibility=if(paths.size>1) View.VISIBLE else View.GONE
             }
         }
-        dialog.window?.setLayout(-1,(resources.displayMetrics.heightPixels*0.88f).toInt())
+        dialog.window?.setLayout(-1,(resources.displayMetrics.heightPixels*0.72f).toInt())
     }
 
     private fun loadPhotoPreview(path: String,size: Int): Bitmap? = try {
@@ -1675,8 +1728,8 @@ class MainActivity : ComponentActivity() {
         BitmapFactory.decodeFile(path,BitmapFactory.Options().apply { inSampleSize=sample })
     } catch (_: Exception) { null }
 
-    private fun makePhotoPlaceholder(): Bitmap {
-        val size=dp(58)
+    private fun makePhotoPlaceholder(sizeDp: Int=48): Bitmap {
+        val size=dp(sizeDp)
         val bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888)
         val canvas=Canvas(bitmap)
         val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(37,99,235) }
@@ -1721,10 +1774,10 @@ class MainActivity : ComponentActivity() {
         return bitmap
     }
 
-    private fun makePhotoBubble(path: String): Bitmap? = try {
+    private fun makePhotoBubble(path: String,sizeDp: Int=48): Bitmap? = try {
         val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
         BitmapFactory.decodeFile(path,bounds)
-        val size=dp(58)
+        val size=dp(sizeDp)
         var sample=1
         while(bounds.outWidth/sample>size*2 || bounds.outHeight/sample>size*2) sample*=2
         val source=BitmapFactory.decodeFile(path,BitmapFactory.Options().apply { inSampleSize=sample }) ?: return null
@@ -1752,15 +1805,22 @@ class MainActivity : ComponentActivity() {
 
     private fun disposeMap() {
         currentStyleReady=false; currentMap=null
-        userLocationMarker=null; photoMarkerDetails.clear(); displayedCloudReports.clear(); remoteMarkers.clear()
+        userLocationMarker=null; photoMarkerDetails.clear(); displayedCloudReports.clear(); remoteMarkers.clear(); queuedSharedPhotos.clear()
         routeLine=null; routeMarkers.clear(); routePanelView=null
         routeOriginField=null; routeDestinationField=null
-        mapView?.onPause(); mapView?.onStop(); mapView?.onDestroy(); mapView=null
+        if(!mapParked) { mapView?.onPause(); mapView?.onStop() }
+        mapView?.onDestroy(); mapView=null; mapParked=false
     }
-    override fun onStart() { super.onStart(); mapView?.onStart() }
+    private fun parkMap() {
+        val map=mapView ?: return
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        if(!mapParked) { map.onPause(); map.onStop(); mapParked=true }
+        (map.parent as? android.view.ViewGroup)?.removeView(map)
+    }
+    override fun onStart() { super.onStart(); if(!mapParked) mapView?.onStart() }
     override fun onResume() {
         super.onResume()
-        mapView?.onResume()
+        if(!mapParked) mapView?.onResume()
         if(waitingForLocationSettings) {
             waitingForLocationSettings=false
             showMyLocation()
@@ -1770,8 +1830,8 @@ class MainActivity : ComponentActivity() {
             showMyLocation()
         }
     }
-    override fun onPause() { mapView?.onPause(); super.onPause() }
-    override fun onStop() { mapView?.onStop(); super.onStop() }
+    override fun onPause() { if(!mapParked) mapView?.onPause(); super.onPause() }
+    override fun onStop() { if(!mapParked) mapView?.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView?.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView?.onSaveInstanceState(outState) }
     override fun onDestroy() {

@@ -103,6 +103,42 @@ class CloudAccount(context: Context) {
     fun forumReplies(postId: Long): JSONArray = requestArray("GET",
         "/rest/v1/forum_thread_replies?post_id=eq.$postId&select=id,post_id,author_id,username,display_name,body,created_at&order=created_at.asc&limit=200",null,true)
 
+    fun friendships(): JSONArray {
+        val id=userId() ?: error("Log in to see your friends.")
+        return requestArray("GET","/rest/v1/friendships?or=(requester_id.eq.$id,addressee_id.eq.$id)"+
+            "&select=id,status,requester_id,addressee_id,requester:profiles!friendships_requester_id_fkey(username,display_name),addressee:profiles!friendships_addressee_id_fkey(username,display_name)&order=created_at.desc",null,true)
+    }
+
+    fun sendFriendRequest(username: String) {
+        val self=userId() ?: error("Log in to add friends.")
+        val name=username.trim().removePrefix("@").lowercase()
+        require(name.matches(Regex("[a-z0-9_]{3,24}"))) { "Enter a valid username." }
+        val person=requestArray("GET","/rest/v1/profiles?username=eq.${URLEncoder.encode(name,"UTF-8")}&select=id",null,true)
+            .optJSONObject(0) ?: error("No WalkIt user has that username.")
+        val other=person.getString("id")
+        require(other!=self) { "You cannot add yourself." }
+        val relationships=friendships()
+        val existing=(0 until relationships.length()).map { relationships.getJSONObject(it) }
+            .firstOrNull { it.optString("requester_id")==other || it.optString("addressee_id")==other }
+        if(existing!=null) {
+            if(existing.optString("status")=="accepted") error("You are already friends.")
+            if(existing.optString("addressee_id")==self) { acceptFriendRequest(existing.getString("id")); return }
+            error("Friend request already sent.")
+        }
+        request("POST","/rest/v1/friendships",JSONObject().put("requester_id",self)
+            .put("addressee_id",other).put("status","pending"),true)
+    }
+
+    fun acceptFriendRequest(id: String) {
+        require(id.matches(Regex("[0-9a-f-]{36}"))) { "Invalid friend request." }
+        request("PATCH","/rest/v1/friendships?id=eq.$id",JSONObject().put("status","accepted"),true)
+    }
+
+    fun removeFriendship(id: String) {
+        require(id.matches(Regex("[0-9a-f-]{36}"))) { "Invalid friend request." }
+        request("DELETE","/rest/v1/friendships?id=eq.$id",null,true)
+    }
+
     fun createForumPost(title: String,body: String) {
         require(title.trim().length in 5..100) { "Title needs 5–100 characters." }
         require(body.trim().length in 10..3000) { "Post needs 10–3000 characters." }

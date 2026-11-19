@@ -12,6 +12,7 @@ Existing device-only accounts cannot be copied into Supabase as passwords becaus
 6. Run [`supabase/04_shared_map_reports.sql`](../supabase/04_shared_map_reports.sql) in the SQL Editor to enable shared report photos and map discussions. The app key cannot create the tables or Storage bucket.
 7. Install the main branch APK on two devices, register different email addresses, confirm each email, then post a report with a photo on one device. Confirm its marker, photos, and discussion appear on the other device.
 8. Run [`supabase/05_oauth_profiles.sql`](../supabase/05_oauth_profiles.sql) in the SQL Editor before enabling Google or Apple. It gives social users a valid profile and username at signup.
+9. Run [`supabase/06_friends.sql`](../supabase/06_friends.sql) in the SQL Editor to enable friend requests and accepted friendships. Until this is applied, the Friends tab shows a setup message.
 
 ## Google and Apple sign-in
 
