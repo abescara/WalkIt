@@ -273,6 +273,47 @@
     friends.list.innerHTML='<div style="padding:18px;opacity:.7">Loading friends…</div>';
     bridge.loadFriends();
   }
+  let suggestionTimer;
+  function suggestionBox(field) {
+    const canvas=document.querySelector(".wrap > div");
+    const input=field==="map"?document.getElementById("map-search-input"):document.getElementById(field);
+    if(!canvas || !input) return null;
+    let box=document.getElementById("search-suggestions");
+    if(!box) { box=document.createElement("div"); box.id="search-suggestions"; canvas.appendChild(box); }
+    const canvasBounds=canvas.getBoundingClientRect(), bounds=input.getBoundingClientRect();
+    const scale=canvasBounds.width/390 || 1;
+    box.style.cssText=`position:absolute;left:${Math.max(16,(bounds.left-canvasBounds.left)/scale)}px;top:${(bounds.bottom-canvasBounds.top)/scale+7}px;width:${Math.min(358,Math.max(260,bounds.width/scale))}px;max-height:240px;overflow-y:auto;background:${fileName.endsWith('_Dark')?'#242424':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};border-radius:14px;box-shadow:0 8px 24px #0003;z-index:50;display:none`;
+    return box;
+  }
+  function openMapSearch() {
+    const bar=document.getElementById("search-location");
+    if(!bar || document.getElementById("map-search-input")) return;
+    bar.dataset.original=bar.innerHTML;
+    bridge.setSearchOverlayActive(true);
+    bar.innerHTML='<span style="font-size:20px;color:#5fbe2a">⌕</span><input id="map-search-input" aria-label="Search location" placeholder="Search places in the Philippines" style="min-width:0;flex:1;border:0;outline:0;background:transparent;color:#222;font:14px Inter,sans-serif"><button id="map-search-close" aria-label="Close search" style="border:0;background:none;color:#555;font-size:20px">×</button>';
+    document.getElementById("map-search-input")?.focus();
+  }
+  window.walkItSuggestions=function(field,query,payload) {
+    const input=field==="map"?document.getElementById("map-search-input"):document.getElementById(field);
+    if(!input || input.value.trim()!==query.trim()) return;
+    const box=suggestionBox(field); if(!box) return;
+    let rows=[]; try { rows=JSON.parse(payload); } catch (_) {}
+    box.innerHTML=rows.length?rows.map(item=>`<button data-place-lat="${Number(item.lat)}" data-place-lon="${Number(item.lon)}" data-place-label="${escapeHtml(item.display_name)}" data-place-field="${field}" style="display:block;width:100%;padding:12px;text-align:left;border:0;border-bottom:1px solid #ddd;background:transparent;color:inherit;font:13px Inter,sans-serif">⌖ ${escapeHtml(item.display_name)}</button>`).join(""):'<div style="padding:12px;font-size:12px;opacity:.65">No matching places. Try a fuller address.</div>';
+    box.style.display="block";
+    bridge.setSearchOverlayActive(true);
+  };
+  window.walkItFriendSuggestions=function(query,payload) {
+    const input=document.getElementById("friend-username");
+    if(!input || input.value.trim().replace(/^@/,"")!==query.trim().replace(/^@/,"")) return;
+    const box=suggestionBox("friend-username"); if(!box) return;
+    let rows=[]; try { rows=JSON.parse(payload); } catch (_) {}
+    box.innerHTML=rows.length?rows.map(item=>`<button data-friend-suggestion="${escapeHtml(item.username)}" style="display:block;width:100%;padding:12px;text-align:left;border:0;border-bottom:1px solid #ddd;background:transparent;color:inherit;font:13px Inter,sans-serif"><b>${escapeHtml(item.display_name||item.username)}</b> · @${escapeHtml(item.username)}</button>`).join(""):'<div style="padding:12px;font-size:12px;opacity:.65">No usernames found.</div>';
+    box.style.display="block";
+  };
+  window.walkItCurrentLocation=function() {
+    const field=document.getElementById("route-origin");
+    if(field && !field.value.trim()) field.value="Current Location";
+  };
   window.walkItFriends=function(payload) {
     if(!friends.list) return;
     let rows; try { rows=JSON.parse(payload); } catch (_) { rows={error:"Could not load friends."}; }
@@ -427,8 +468,20 @@
       if(bridge) bridge.changeProfilePhoto();
       return;
     }
+    const placeChoice=event.target.closest("[data-place-lat]");
+    if(placeChoice) {
+      const field=placeChoice.dataset.placeField;
+      if(field==="map") { bridge.chooseMapPlace(Number(placeChoice.dataset.placeLat),Number(placeChoice.dataset.placeLon)); const input=document.getElementById("map-search-input"); input.value=placeChoice.dataset.placeLabel; input.blur(); }
+      else { const input=document.getElementById(field); if(input) { input.value=placeChoice.dataset.placeLabel; input.blur(); } }
+      document.getElementById("search-suggestions")?.style.setProperty("display","none");
+      bridge.setSearchOverlayActive(false);
+      return;
+    }
+    const friendChoice=event.target.closest("[data-friend-suggestion]");
+    if(friendChoice) { const input=document.getElementById("friend-username"); if(input) input.value=friendChoice.dataset.friendSuggestion; document.getElementById("search-suggestions")?.style.setProperty("display","none"); return; }
+    if(event.target.closest("#map-search-close")) { const bar=document.getElementById("search-location"); if(bar) bar.innerHTML=bar.dataset.original||"Search Location"; document.getElementById("search-suggestions")?.style.setProperty("display","none"); bridge.setSearchOverlayActive(false); return; }
     const locationSearch = event.target.closest("#search-location");
-    if (locationSearch && bridge) { bridge.searchLocation(); return; }
+    if (locationSearch && bridge && !event.target.closest("input")) { openMapSearch(); return; }
     const locationPin = event.target.closest("#report-location");
     if (locationPin && bridge) { bridge.changeReportLocation(); return; }
 
@@ -633,11 +686,26 @@
   });
 
   document.addEventListener("input",function(event){
+    const id=event.target?.id;
+    if(["map-search-input","route-origin","route-destination","friend-username"].includes(id)) {
+      clearTimeout(suggestionTimer);
+      const query=event.target.value.trim();
+      if(query.length<2) { document.getElementById("search-suggestions")?.style.setProperty("display","none"); }
+      else suggestionTimer=setTimeout(()=>id==="friend-username"?bridge.searchFriendUsernames(query):bridge.suggestPlaces(query,id==="map-search-input"?"map":id),450);
+    }
     if(screenName==="Routes" && (event.target?.id==="route-origin" || event.target?.id==="route-destination")) {
       localStorage.setItem("walkit-route-fields",JSON.stringify({start:document.getElementById("route-origin")?.value || "",end:document.getElementById("route-destination")?.value || ""}));
     }
     if(screenName==="Report" && event.target && event.target.id==="report-details") {
       saveDraft({category:window.walkItCategory || "Broken sidewalk",details:event.target.value});
+    }
+  });
+  document.addEventListener("keydown",function(event){
+    if(event.key==="Enter" && event.target?.id==="map-search-input") {
+      event.preventDefault();
+      const first=document.querySelector("#search-suggestions [data-place-lat]");
+      if(first) first.click();
+      else bridge.searchMapPlace(event.target.value);
     }
   });
 

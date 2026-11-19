@@ -111,6 +111,14 @@ class CloudAccount(context: Context) {
             "&select=id,status,requester_id,addressee_id,requester:profiles!friendships_requester_id_fkey(username,display_name),addressee:profiles!friendships_addressee_id_fkey(username,display_name)&order=created_at.desc",null,true)
     }
 
+    fun searchProfiles(query: String): JSONArray {
+        val name=query.trim().removePrefix("@").lowercase().take(24)
+        if(name.length<2 || !name.matches(Regex("[a-z0-9_]+"))) return JSONArray()
+        val self=userId() ?: error("Log in to find friends.")
+        val pattern=URLEncoder.encode("$name%","UTF-8")
+        return requestArray("GET","/rest/v1/profiles?username=ilike.$pattern&id=neq.$self&select=id,username,display_name&order=username.asc&limit=8",null,true)
+    }
+
     fun sendFriendRequest(username: String) {
         val self=userId() ?: error("Log in to add friends.")
         val name=username.trim().removePrefix("@").lowercase()

@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     private var lastSubmittedDescription = ""
     private var lastSubmittedLocation = ""
     private var forwardingMapGesture = false
+    private var searchOverlayActive = false
     private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if(uris.isNotEmpty()) worker.execute {
             val imported=uris.mapNotNull { uri ->
@@ -363,6 +364,7 @@ class MainActivity : ComponentActivity() {
     private fun assetExists(path: String): Boolean = try { assets.open(path).use { true } } catch (_: Exception) { false }
 
     private fun clearFrontendView() {
+        searchOverlayActive=false
         currentWebView?.apply {
             stopLoading()
             (parent as? android.view.ViewGroup)?.removeView(this)
@@ -378,7 +380,7 @@ class MainActivity : ComponentActivity() {
         if(event.actionMasked==MotionEvent.ACTION_DOWN) {
             val scale=web.width/390f
             val designY=event.y/scale
-            forwardingMapGesture=designY in 158f..(if(currentWebScreen=="Routes") 460f else 738f)
+            forwardingMapGesture=!searchOverlayActive && designY in 158f..(if(currentWebScreen=="Routes") 460f else 738f)
         }
         if(!forwardingMapGesture) return false
         val copy=MotionEvent.obtain(event)
@@ -389,6 +391,7 @@ class MainActivity : ComponentActivity() {
     }
 
     inner class FrontendBridge {
+        @JavascriptInterface fun setSearchOverlayActive(active: Boolean) { searchOverlayActive=active }
         @JavascriptInterface fun login(email: String,password: String) {
             worker.execute {
                 val result=runCatching {
@@ -696,7 +699,7 @@ class MainActivity : ComponentActivity() {
             val end=EditText(this@MainActivity).apply { setText(lastRouteEndQuery) }
             requestWalkingRoute(start,end,TextView(this@MainActivity),obstacle)
         }
-        @JavascriptInterface fun getRouteOrigin(): String = if(lastUserLocation!=null) "Current location" else ""
+        @JavascriptInterface fun getRouteOrigin(): String = if(lastUserLocation!=null) "Current Location" else ""
         @JavascriptInterface fun pickRoutePoint(which: String) = runOnUiThread {
             if(which!="start" && which!="end") return@runOnUiThread
             pickingRoutePoint=which
@@ -706,7 +709,42 @@ class MainActivity : ComponentActivity() {
             if((if(which=="start") routeStartPoint else routeEndPoint)!=null)
                 if(which=="start") "Pinned start on map" else "Pinned destination on map"
             else ""
-        @JavascriptInterface fun searchLocation() = runOnUiThread { showCoordinateSearch() }
+        @JavascriptInterface fun suggestPlaces(query: String,field: String) {
+            val web=currentWebView
+            if(query.trim().length<2 || field !in setOf("map","route-origin","route-destination")) return
+            worker.execute {
+                val result=runCatching { placeSuggestions(query.trim()).toString() }.getOrDefault("[]")
+                runOnUiThread { if(web===currentWebView) web?.evaluateJavascript(
+                    "window.walkItSuggestions && window.walkItSuggestions(${JSONObject.quote(field)},${JSONObject.quote(query)},${JSONObject.quote(result)})",null) }
+            }
+        }
+        @JavascriptInterface fun searchFriendUsernames(query: String) {
+            val web=currentWebView
+            if(query.trim().length<2) return
+            worker.execute {
+                val result=runCatching { cloud.searchProfiles(query).toString() }.getOrDefault("[]")
+                runOnUiThread { if(web===currentWebView) web?.evaluateJavascript(
+                    "window.walkItFriendSuggestions && window.walkItFriendSuggestions(${JSONObject.quote(query)},${JSONObject.quote(result)})",null) }
+            }
+        }
+        @JavascriptInterface fun chooseMapPlace(latitude: Double,longitude: Double) = runOnUiThread {
+            if(latitude !in 4.0..21.8 || longitude !in 116.0..127.0) return@runOnUiThread
+            val point=LatLng(latitude,longitude)
+            mapTarget=point; mapZoom=16.0
+            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+        }
+        @JavascriptInterface fun searchMapPlace(query: String) {
+            worker.execute {
+                val point=resolvePlace(query.trim())
+                runOnUiThread {
+                    if(point==null) toast("Place not found in the Philippines.")
+                    else {
+                        mapTarget=point; mapZoom=16.0
+                        currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+                    }
+                }
+            }
+        }
         @JavascriptInterface fun showMessage(message: String) = runOnUiThread { toast(message) }
         @JavascriptInterface fun setDarkMode(enabled: Boolean) = runOnUiThread {
             darkThemeEnabled=enabled
@@ -791,29 +829,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun showCoordinateSearch() {
-        val field=EditText(this).apply {
-            hint="Search a place or address in the Philippines"
-            setSingleLine(true)
+    private fun placeSuggestions(query: String): org.json.JSONArray {
+        val results=org.json.JSONArray()
+        val matches=Geocoder(this,Locale("en","PH")).getFromLocationName(query,5).orEmpty()
+        matches.filter { it.latitude in 4.0..21.8 && it.longitude in 116.0..127.0 }.forEach { address ->
+            results.put(JSONObject().put("display_name",address.getAddressLine(0) ?: address.featureName ?: query)
+                .put("lat",address.latitude).put("lon",address.longitude))
         }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Find a map location")
-            .setView(field)
-            .setNegativeButton("Cancel",null)
-            .setPositiveButton("Go") { _,_ ->
-                val query=field.text.toString().trim()
-                if(query.isBlank()) return@setPositiveButton
-                worker.execute {
-                    val point=resolvePlace(query)
-                    runOnUiThread {
-                        if(point==null) toast("Place not found in the Philippines. Try a more specific address.")
-                        else {
-                            mapTarget=point; mapZoom=16.0
-                            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
-                        }
-                    }
-                }
-            }.show()
+        return results
     }
 
     private fun discardReportDraft() {
@@ -890,7 +913,10 @@ class MainActivity : ComponentActivity() {
         if(reused && mapParked) { map.onStart(); map.onResume() }
         mapParked=false
         if(reused && currentMap!=null) currentMap?.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
-        if(reused) screen.post { currentMap?.let(::hydrateVisiblePhotoMarkers) }
+        if(reused) screen.post {
+            runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
+            currentMap?.let(::hydrateVisiblePhotoMarkers)
+        }
 
         if(photoLocationPicking) {
             val locate=TextView(this).apply {
@@ -1104,7 +1130,7 @@ class MainActivity : ComponentActivity() {
             try {
                 val from=when(startQuery) {
                     "Pinned start on map" -> routeStartPoint
-                    "Current location" -> lastUserLocation
+                    "Current Location", "Current location" -> lastUserLocation
                     else -> resolvePlace(startQuery)
                 }
                 val to=if(endQuery=="Pinned destination on map") routeEndPoint else resolvePlace(endQuery)
@@ -1364,6 +1390,8 @@ class MainActivity : ComponentActivity() {
         getSharedPreferences("walkit-location",MODE_PRIVATE).edit()
             .putLong("latitude",point.latitude.toBits()).putLong("longitude",point.longitude.toBits()).apply()
         routeOriginField?.setText(formatCoordinate(point))
+        if(currentWebScreen=="Routes") currentWebView?.evaluateJavascript(
+            "window.walkItCurrentLocation && window.walkItCurrentLocation()",null)
         addUserLocationMarker(point)
         currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
     }
@@ -1597,6 +1625,8 @@ class MainActivity : ComponentActivity() {
     private fun addPhotoMarkers(report: PhotoReport,cloudPhotoPaths: List<String> = emptyList()) {
         val map=currentMap ?: return
         if(!currentStyleReady) return
+        if(report.id>0 && (photoMarkerDetails.values.any { it.report.id==report.id } || hiddenPhotoDetails.any { it.report.id==report.id })) return
+        if(report.id<0 && report.cloudId!=null && (photoMarkerDetails.values.any { it.report.cloudId==report.cloudId } || hiddenPhotoDetails.any { it.report.cloudId==report.cloudId })) return
         val coordinates=report.location.split(",").map { it.trim().toDoubleOrNull() ?: return }
         if(coordinates.size!=2) return
         val point=LatLng(coordinates[0],coordinates[1])
