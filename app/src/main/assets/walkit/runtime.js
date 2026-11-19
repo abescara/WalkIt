@@ -102,22 +102,107 @@
     if (!bridge || !["Login","Signup","Profile","Edit_Profile","Leaderboard","Leaderboard_Nationwide"].includes(screenName)) return;
     const canvas=document.querySelector(".wrap > div");
     if (!canvas) return;
-    const input=(id,label,type="text",value="")=>`<label style="display:block;margin:14px 0 5px;font-size:13px;font-weight:600">${label}</label><input id="${id}" type="${type}" value="${escapeHtml(value)}" style="width:100%;height:48px;border:1px solid #d1d5db;border-radius:14px;padding:0 14px;box-sizing:border-box;font:15px Inter,sans-serif;background:#fff;color:#111">`;
-    const button=(id,label,primary=true)=>`<button id="${id}" style="width:100%;height:48px;margin-top:16px;border:0;border-radius:24px;background:${primary?'#5fbe2a':'#f0f2f0'};color:#17230f;font-size:15px;font-weight:700">${label}</button>`;
-    const shell=(title,content)=>`<div style="position:absolute;inset:0;background:#f8faf7;color:#17230f;font:14px Inter,sans-serif;overflow-y:auto"><div style="padding:34px 26px 30px"><img src="../images/logo.png" alt="Walk It" style="width:38px;height:52px;object-fit:contain"><h1 style="font-size:25px;margin:18px 0 12px">${title}</h1>${content}<div id="account-message" role="status" style="min-height:22px;margin-top:14px;color:#b42318"></div></div></div>`;
-    const showPassword=`<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px"><input id="show-account-password" type="checkbox"> Show password</label>`;
-    if (screenName==="Login") canvas.innerHTML=shell("Welcome back",`<p>Log in to WalkIt with your email.</p>${input("account-email","Email","email")}${input("account-password","Password","password")}${showPassword}${button("login-submit","Log in")}${button("open-signup","Create an account",false)}`);
-    if (screenName==="Signup") canvas.innerHTML=shell("Create account",`${input("account-name","Display name")}${input("account-username","Username")}${input("account-email","Email","email")}${input("account-password","Password (12 or more characters)","password")}${input("account-confirm","Confirm password","password")}${showPassword}${button("signup-submit","Create account")}${button("open-login","Back to login",false)}`);
-    if (screenName==="Profile" || screenName==="Edit_Profile") {
+    const dark=fileName.endsWith("_Dark");
+    const leaf=(text)=>Array.from(canvas.querySelectorAll("div,h2,p,span")).find(item=>item.children.length===0 && item.textContent.trim()===text);
+    const replaceField=(element,id,type,placeholder,value="")=>{
+      if(!element) return;
+      const field=document.createElement("input");
+      field.id=id; field.type=type; field.placeholder=placeholder; field.value=value;
+      field.style.cssText=element.style.cssText+`;width:100%;box-sizing:border-box;outline:none;font:14px Inter,sans-serif;color:${dark?'#f2f2f2':'#1a1a1a'}`;
+      element.replaceWith(field);
+    };
+    if(screenName==="Login" || screenName==="Signup") {
+      const form=canvas.querySelector('div[style*="top:110px"],div[style*="top:84px"]');
+      if(form) form.style.cssText+=";bottom:8px;overflow-y:auto;scrollbar-width:none";
+      if(screenName==="Signup") {
+        const name=leaf("Juan Dela Cruz");
+        replaceField(name,"account-name","text","Full name");
+        const username=document.createElement("div");
+        username.innerHTML=`<div style="font-size:12px;font-weight:600;color:${dark?'#ddd':'#444'};margin:12px 0 6px 6px">Username</div><input id="account-username" type="text" placeholder="Choose a username" autocapitalize="none" style="width:100%;height:52px;border:1px solid ${dark?'#555':'#cfcfcf'};border-radius:26px;padding:0 20px;box-sizing:border-box;font:14px Inter,sans-serif;background:${dark?'#262626':'#fff'};color:${dark?'#fff':'#1a1a1a'}">`;
+        document.getElementById("account-name")?.insertAdjacentElement("afterend",username);
+      }
+      replaceField(leaf("you@email.com"),"account-email","email","you@email.com");
+      const passwordBoxes=Array.from(canvas.querySelectorAll("div")).filter(item=>item.style.height==="52px" && item.textContent.includes("••"));
+      passwordBoxes.forEach((box,index)=>{
+        box.textContent="";
+        const field=document.createElement("input");
+        field.id=index===0?"account-password":"account-confirm"; field.type="password";
+        field.placeholder=index===0?"At least 12 characters":"Repeat password";
+        field.style.cssText=`flex:1;min-width:0;border:0;outline:none;background:transparent;font:14px Inter,sans-serif;color:${dark?'#fff':'#1a1a1a'}`;
+        box.appendChild(field);
+        if(index===0) {
+          const show=document.createElement("button"); show.type="button"; show.id="show-account-password"; show.textContent="Show";
+          show.style.cssText="border:0;background:none;color:#3d7f12;font:600 12px Inter,sans-serif;padding:8px";
+          box.appendChild(show);
+        }
+      });
+      const submit=Array.from(canvas.querySelectorAll("button")).find(item=>item.textContent.trim()===(screenName==="Login"?"Log In":"Sign Up") && !item.closest("div[style*=\"text-align:center\"]"));
+      if(submit) submit.id=screenName==="Login"?"login-submit":"signup-submit";
+      const message=document.createElement("div"); message.id="account-message"; message.setAttribute("role","status");
+      message.style.cssText="min-height:20px;margin-top:8px;color:#b42318;font:12px Inter,sans-serif";
+      submit?.insertAdjacentElement("afterend",message);
+      return;
+    }
+    if(screenName==="Profile" || screenName==="Edit_Profile") {
       let profile={}; try { profile=JSON.parse(bridge.getProfile()); } catch (_) {}
-      canvas.innerHTML=shell("Profile",`<p style="color:#54615a">@${escapeHtml(profile.username||"")}</p><p>${profile.reports||0} reports · ${profile.comments||0} comments</p>${input("profile-name","Display name","text",profile.displayName||"")}<label style="display:block;margin:14px 0 5px;font-size:13px;font-weight:600">Bio</label><textarea id="profile-bio" maxlength="300" style="width:100%;height:90px;border:1px solid #d1d5db;border-radius:14px;padding:12px;box-sizing:border-box;font:15px Inter,sans-serif">${escapeHtml(profile.bio||"")}</textarea>${button("profile-save","Save profile")}${button("profile-leaderboard","Leaderboard",false)}${button("profile-map","Back to map",false)}${button("profile-logout","Log out",false)}`);
+      const points=Number(profile.points)||0;
+      const tier=points>=200?"Platinum":points>=100?"Gold":points>=50?"Silver":"Bronze";
+      const next=points>=200?null:points>=100?200:points>=50?100:50;
+      if(screenName==="Profile") {
+        const set=(old,value)=>{ const item=leaf(old); if(item) item.textContent=value; };
+        set("Juan Dela Cruz",profile.displayName||"Walker"); set("@juan.walks","@"+(profile.username||""));
+        set("Walking Sampaloc daily and reporting broken paths so everyone can get around safely.",profile.bio||"No bio yet.");
+        set("12",profile.reports||0); set("34",0); set("4",0); set("#3",profile.rank?"#"+profile.rank:"—");
+        const title=Array.from(canvas.querySelectorAll("span")).find(item=>item.textContent.includes("Gold · Level 6"));
+        if(title) title.lastChild.textContent=tier;
+        const gold=leaf("Gold"); if(gold) gold.textContent=tier;
+        set("Next: Platinum",next?`Next: ${next===50?"Silver":next===100?"Gold":"Platinum"}`:"Highest title");
+        set("124 / 200 points",next?`${points} / ${next} points`:`${points} points`);
+        const progress=canvas.querySelector('div[style*="width:62%"]');
+        if(progress) progress.style.width=next?Math.round(points/next*100)+"%":"100%";
+      } else {
+        replaceField(leaf("Juan Dela Cruz"),"profile-name","text","Display name",profile.displayName||"");
+        const username=leaf("@juan.walks"); if(username) username.textContent="@"+(profile.username||"");
+        const bio=leaf("Walking Sampaloc daily and reporting broken paths so everyone can get around safely.");
+        if(bio) {
+          const field=document.createElement("textarea"); field.id="profile-bio"; field.maxLength=300; field.value=profile.bio||"";
+          field.style.cssText=bio.style.cssText+`;width:100%;resize:none;background:${dark?'#262626':'#fff'};color:${dark?'#fff':'#1a1a1a'}`; bio.replaceWith(field);
+        }
+        const hint=leaf("✓ Username is available"); if(hint) hint.textContent="Username is set on registration";
+        const save=Array.from(canvas.querySelectorAll("button")).find(item=>item.textContent.trim()==="Save changes");
+        if(save) save.id="profile-save";
+      }
+      if(screenName==="Profile") {
+        const edit=Array.from(canvas.querySelectorAll("button")).find(item=>item.textContent.trim()==="Edit profile");
+        if(edit) {
+          const logout=document.createElement("button"); logout.id="profile-logout"; logout.textContent="Log out";
+          logout.style.cssText="position:absolute;left:16px;right:16px;top:338px;height:36px;border:0;background:none;color:#3d7f12;font:600 13px Inter,sans-serif";
+          canvas.appendChild(logout);
+        }
+      }
+      return;
     }
-    if (screenName.startsWith("Leaderboard")) {
-      let entries=[]; try { entries=JSON.parse(bridge.getLeaderboard()); } catch (_) {}
-      const current=bridge.getCurrentUserId();
-      const rows=entries.length ? entries.map(entry=>`<div style="display:flex;align-items:center;gap:12px;padding:13px;margin:8px 0;border-radius:16px;background:${entry.userId===current?'#e7f6dc':'#fff'}"><b style="width:28px">#${entry.rank}</b><div style="flex:1"><b>${escapeHtml(entry.displayName)}</b><div style="font-size:12px;color:#5b675d">${entry.reports} reports · ${entry.comments} comments</div></div><b>${entry.points} pts</b></div>`).join("") : "<p>No ranked accounts yet. Post a report to earn points.</p>";
-      canvas.innerHTML=shell("Leaderboard",`<p>10 points per report · 2 points per comment</p><p style="font-size:12px;color:#5b675d">WalkIt accounts</p>${rows}${button("leaderboard-back","Back to rewards",false)}`);
-    }
+    if(screenName.startsWith("Leaderboard")) renderDesignedLeaderboard(canvas);
+  }
+
+  function renderDesignedLeaderboard(canvas) {
+    let entries=[]; try { entries=JSON.parse(bridge.getLeaderboard()); } catch (_) {}
+    const dark=fileName.endsWith("_Dark"), current=bridge.getCurrentUserId();
+    const filters=Array.from(canvas.querySelectorAll("button")).filter(item=>["Friends","Nationwide","This week"].includes(item.textContent.trim()));
+    filters.forEach(item=>{
+      const selected=item.textContent.trim()==="Nationwide";
+      item.style.background=selected?(dark?"#f2f2f2":"#2b2b2b"):(dark?"#242424":"#fff");
+      item.style.color=selected?(dark?"#111":"#fff"):(dark?"#f2f2f2":"#333");
+      item.setAttribute("aria-pressed",selected?"true":"false");
+    });
+    Array.from(canvas.children).forEach(item=>{
+      if(item.style.top && Number.parseInt(item.style.top,10)>=218 && item.style.bottom!=="0px") item.remove();
+    });
+    const list=document.createElement("div");
+    list.style.cssText=`position:absolute;top:218px;left:16px;right:16px;bottom:72px;overflow-y:auto;scrollbar-width:none;color:${dark?'#f2f2f2':'#1a1a1a'}`;
+    list.innerHTML=`<div style="font-size:14px;font-weight:700;margin:4px 0 14px">WalkIt leaderboard</div><div style="font-size:12px;opacity:.7;margin-bottom:12px">10 points per uploaded report</div>`+
+      (entries.length?entries.map(entry=>`<div style="display:flex;align-items:center;gap:12px;padding:14px;margin:8px 0;border-radius:16px;background:${entry.userId===current?'#dff5d2':dark?'#2b2b2b':'#f4f4f4'};color:${entry.userId===current?'#17230f':'inherit'}"><b style="width:32px">#${entry.rank}</b><div style="flex:1;min-width:0"><b>${escapeHtml(entry.displayName)}</b><div style="font-size:12px;opacity:.7">@${escapeHtml(entry.username)} · ${entry.reports} reports</div></div><b>${entry.points} pts</b></div>`).join(""):'<p>No ranked accounts yet. Submit a report to earn points.</p>');
+    canvas.appendChild(list);
   }
 
   function escapeHtml(value) { return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char])); }
@@ -193,6 +278,19 @@
     if(button.id==="profile-leaderboard") { bridge.navigate("leaderboard"); return; }
     if(button.id==="profile-map") { bridge.navigate("map"); return; }
     if(button.id==="leaderboard-back") { bridge.navigate("rewards"); return; }
+    if(button.id==="show-account-password") {
+      const show=document.getElementById("account-password").type==="password";
+      ["account-password","account-confirm"].forEach(id=>{ const field=document.getElementById(id); if(field) field.type=show?"text":"password"; });
+      button.textContent=show?"Hide":"Show"; return;
+    }
+    if(screenName==="Login" && lower==="sign up") { bridge.navigate("signup"); return; }
+    if(screenName==="Signup" && lower==="log in") { bridge.navigate("login"); return; }
+    if(lower==="cancel" && screenName==="Edit_Profile") { bridge.navigate("profile"); return; }
+    if(lower==="forgot password?") { bridge.showMessage("Password reset is being prepared. Contact the team if you need access restored."); return; }
+    if(lower==="this week") { bridge.showMessage("Weekly rankings are not available yet."); return; }
+    if(button.getAttribute("aria-label")?.includes("sign in with") || button.getAttribute("aria-label")?.includes("sign up with")) {
+      bridge.showMessage("Use email and password to continue."); return;
+    }
     if (lower === "pin route start on map" || lower === "pin route destination on map") {
       const start=document.getElementById("route-origin");
       const end=document.getElementById("route-destination");

@@ -8,11 +8,11 @@ The supplied mobile screens and image assets are packaged in `app/src/main/asset
 - `images/` contains the logo and UI images used by those screens.
 - `runtime.js` makes the screen canvas fit common phone sizes and connects screen actions to Android.
 
-The original `index.html` was a desktop gallery, so it is not loaded inside the app. The app starts on the map and keeps login and signup out of the launch flow.
+The original `index.html` was a desktop gallery, so it is not loaded inside the app. The app opens the map after restoring a session; users without a session see the supplied login and signup layouts with working email/password fields.
 
 ## Native and HTML responsibilities
 
-- The main HTML map shell is drawn above the native MapLibre map. Map gestures in the open map area are forwarded to MapLibre; its current-location and route controls remain native.
+- The main HTML map shell is drawn above the native MapLibre map. Map gestures in the open map area are forwarded to MapLibre; location and route planning remain native.
 - Camera capture, photo-location picking, GPS, report persistence, and the point-to-point route request remain native Android features.
 - Community, Routes, Rewards, Notifications, Profile, report, and report-preview screens load from local HTML assets in a WebView.
 - `FrontendBridge` connects supported screen actions to Android navigation, camera/gallery selection, local report saving, coordinate search, theme switching, and route planning.
@@ -21,6 +21,6 @@ Keep the bridge limited to packaged local pages. Do not enable external page nav
 
 ## Current prototype limits
 
-Several pages contain sample text, counts, and posts from the design. Community posting, friends, profile edits, badges, and notifications do not yet synchronize or persist as backend data. Reports, photos, and discussions are stored on the current device only. Place-name geocoding and fully accessible route preferences are not implemented.
+Community, friends, and notifications still contain sample content from the designs. Account details, leaderboard entries, report counts, points, and report badges use shared account data. Profile name and bio edits persist through Supabase. Photos and discussions are stored on the current device. Route preferences are still visual controls.
 
 When updating a screen, edit the packaged asset and keep its image paths relative to `screens/`. The WebView loads the individual screen files, not the desktop gallery.

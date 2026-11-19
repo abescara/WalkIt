@@ -361,12 +361,15 @@ class MainActivity : ComponentActivity() {
         }
         @JavascriptInterface fun getProfile(): String {
             val profile=cloudProfile ?: return "{}"
-            val entry=runCatching { cloud.leaderboard() }.getOrNull()?.let { rows ->
-                (0 until rows.length()).mapNotNull(rows::optJSONObject).firstOrNull { it.optString("id")==profile.optString("id") }
-            }
+            val ranked=runCatching { cloud.leaderboard() }.getOrNull()?.let { rows ->
+                (0 until rows.length()).mapNotNull(rows::optJSONObject)
+            }.orEmpty()
+            val rank=ranked.indexOfFirst { it.optString("id")==profile.optString("id") }
+            val entry=ranked.getOrNull(rank)
             return JSONObject().put("username",profile.optString("username"))
                 .put("displayName",profile.optString("display_name")).put("bio",profile.optString("bio"))
-                .put("reports",entry?.optInt("reports") ?: 0).put("comments",entry?.optInt("comments") ?: 0).toString()
+                .put("reports",entry?.optInt("reports") ?: 0).put("comments",entry?.optInt("comments") ?: 0)
+                .put("points",entry?.optInt("points") ?: 0).put("rank",if(rank>=0) rank+1 else 0).toString()
         }
         @JavascriptInterface fun saveProfile(displayName: String,bio: String) {
             val id=userId ?: return
