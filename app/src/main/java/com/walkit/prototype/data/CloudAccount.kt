@@ -1,6 +1,8 @@
 package com.walkit.prototype.data
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import com.walkit.prototype.BuildConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -9,6 +11,9 @@ import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.URLEncoder
 
 /** Auth and profile requests use only the public project key and the user's token. */
 class CloudAccount(context: Context) {
@@ -96,6 +101,67 @@ class CloudAccount(context: Context) {
             ?: error("The server did not return a report ID.")
     }
 
+    fun mapReports(): JSONArray = requestArray("GET",
+        "/rest/v1/reports?select=id,owner_id,description,category,latitude,longitude,created_at&order=created_at.desc&limit=100",null,true)
+
+    fun reportPhotos(): JSONArray = requestArray("GET",
+        "/rest/v1/report_photos?select=report_id,storage_path,position&order=position.asc&limit=1000",null,true)
+
+    fun mapComments(reportId: String): JSONArray = requestArray("GET",
+        "/rest/v1/map_comments?report_id=eq.$reportId&select=id,owner_id,body,anonymous,attachment_path,created_at,display_name,username&order=created_at.asc&limit=200",null,true)
+
+    fun addReportPhoto(reportId: String,position: Int,storagePath: String) {
+        val id=userId() ?: error("Log in to share a report photo.")
+        rawRequest("POST","/rest/v1/report_photos?on_conflict=report_id,position",
+            JSONObject().put("report_id",reportId).put("owner_id",id)
+                .put("position",position).put("storage_path",storagePath),true,false,
+            "resolution=ignore-duplicates")
+    }
+
+    fun postMapComment(reportId: String,body: String,anonymous: Boolean,attachmentPath: String?): String {
+        val id=userId() ?: error("Log in to comment.")
+        val response=requestArray("POST","/rest/v1/comments",
+            JSONObject().put("report_id",reportId).put("owner_id",id)
+                .put("body",body.trim()).put("anonymous",anonymous)
+                .put("attachment_path",attachmentPath ?: JSONObject.NULL),true,true)
+        return response.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
+            ?: error("The server did not return a comment ID.")
+    }
+
+    fun uploadPhoto(storagePath: String,file: File) {
+        require(file.exists()) { "A photo on this device is missing." }
+        val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+        BitmapFactory.decodeFile(file.absolutePath,bounds)
+        require(bounds.outWidth>0 && bounds.outHeight>0) { "Could not read a photo." }
+        var sample=1
+        while(bounds.outWidth/sample>1600 || bounds.outHeight/sample>1600) sample*=2
+        val bitmap=BitmapFactory.decodeFile(file.absolutePath,BitmapFactory.Options().apply { inSampleSize=sample })
+            ?: error("Could not read a photo.")
+        val bytes=ByteArrayOutputStream().use { output ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG,82,output)
+            bitmap.recycle()
+            output.toByteArray()
+        }
+        val request=Request.Builder().url("$base/storage/v1/object/report-photos/${encodePath(storagePath)}")
+            .header("apikey",key).header("Authorization","Bearer ${token()}")
+            .post(bytes.toRequestBody("image/jpeg".toMediaType())).build()
+        http.newCall(request).execute().use { response ->
+            if(!response.isSuccessful && response.code!=409)
+                error("Photo upload failed (${response.code}): ${response.body?.string().orEmpty().take(160)}")
+        }
+    }
+
+    fun downloadPhoto(storagePath: String): ByteArray {
+        val request=Request.Builder().url("$base/storage/v1/object/report-photos/${encodePath(storagePath)}")
+            .header("apikey",key).header("Authorization","Bearer ${token()}").get().build()
+        return http.newCall(request).execute().use { response ->
+            if(!response.isSuccessful) error("Could not load a shared photo (${response.code}).")
+            response.body?.bytes() ?: error("The shared photo is empty.")
+        }
+    }
+
+    private fun encodePath(path: String): String = path.split('/').joinToString("/") { URLEncoder.encode(it,"UTF-8") }
+
     @Synchronized private fun token(): String {
         val access=prefs.getString("access_token",null)
         if(!access.isNullOrBlank() && prefs.getLong("expires_at",0)>System.currentTimeMillis()+30_000) return access
@@ -125,11 +191,12 @@ class CloudAccount(context: Context) {
         return JSONObject(text.ifBlank { "{}" })
     }
 
-    private fun rawRequest(method: String,path: String,body: JSONObject?,auth: Boolean,returnRows: Boolean): String {
+    private fun rawRequest(method: String,path: String,body: JSONObject?,auth: Boolean,returnRows: Boolean,prefer: String?=null): String {
         check(configured) { "Supabase is not configured." }
         val request=Request.Builder().url(base+path).header("apikey",key).apply {
             if(auth) header("Authorization","Bearer ${token()}")
             if(returnRows) header("Prefer","return=representation")
+            if(prefer!=null) header("Prefer",prefer)
             method(method,body?.toString()?.toRequestBody("application/json".toMediaType()))
         }.build()
         return http.newCall(request).execute().use { response ->

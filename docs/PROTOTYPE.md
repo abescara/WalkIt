@@ -7,7 +7,7 @@
 - Launch directly into a full-screen interactive map with Map, Forums, and Profile bottom tabs. Forums and Profile are intentionally empty placeholders.
 - Camera button opens an in-app CameraX preview with a Single/Batch switch above the shutter. Single capture advances directly to the report sheet; Batch capture keeps the camera open until Done is tapped. The sheet can also add photos from the gallery.
 - After camera capture or gallery selection, a map picker opens with a fixed pin at the center. Panning and zooming the map selects the report coordinates; the selected point is constrained to the Philippines. The report sheet collects a description and time. Photos and metadata are saved locally; no cloud upload happens.
-- Each report appears as one circular thumbnail marker at its selected coordinate. Tapping it opens the photos and a discussion panel. Comments support anonymous posting and an optional photo attachment and persist in the local database.
+- Each report appears as one circular thumbnail marker at its selected coordinate. Tapping it opens the photos and a discussion panel. Signed-in users can view shared reports and post comments with optional photo attachments. Local copies are kept for uploads and retries.
 - Create and list shared hazard reports tied to sample pathway segments. The signed-in owner may mark their own reports resolved or delete them after confirmation. Ownership is checked in SQL updates and deletes.
 - View two predefined sample routes with distance, active report counts, and active accessibility barrier counts. The screen warns that zero recorded hazards does not prove safety.
 - Open an interactive MapLibre street map constrained to the Philippines, with visible roads and labels. The map has a current-location control and no hard-coded route overlays. The compass and prototype map label are hidden.
@@ -23,7 +23,7 @@
 - Eight separate Activities and Intent navigation. This initial draft uses one Activity with simple screens.
 - Full route preference sorting, production reference data, field observation date entry, and migrations.
 - Replacing illustrative map coordinates with instructor-approved segment coordinates and connecting stored reports to map pins.
-- Adding a backend/cloud storage flow if cross-device photo and discussion sharing is required; current reports, photos, and comments are local to the installation.
+- Shared map photos and comments require the Supabase migration in `supabase/04_shared_map_reports.sql`.
 - Backend-driven community posts, friend actions, profile storage, reward totals, and notifications; current HTML samples are static prototype content.
 - Full place-name search, production route preferences, and accessibility-aware detours; the existing route planner uses numeric coordinates and an online routing service.
 - Account registration and login if they are restored for a later release.

@@ -15,7 +15,7 @@ WalkIt is an Android prototype with a hybrid HTML/native frontend for mapping ph
 
 Storage and sharing
 
-Reports and photos are stored locally first. Report text, category, and location are sent to the shared Supabase database for rankings. Forum discussions and replies use Supabase. Report photo files and report-marker discussions remain on the device for now.
+Reports and photos are stored locally first, then sent to Supabase so signed-in users can see each other's map markers and pictures. Report discussions, including optional comment photos, are shared as well. Failed local uploads retry after the next login. Forum discussions and replies use Supabase. The shared map features require the 04_shared_map_reports.sql migration.
 
 Build artifact
 

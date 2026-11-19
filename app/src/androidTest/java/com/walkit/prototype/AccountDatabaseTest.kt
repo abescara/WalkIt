@@ -177,7 +177,7 @@ class AccountDatabaseTest {
         assertNull(db.login("guest", password))
         assertEquals("Guest report", db.photoReports().single().description)
         assertEquals(listOf("legacy-photo.jpg"), db.photoReports().single().photos)
-        assertEquals(5, db.readableDatabase.version)
+        assertEquals(6, db.readableDatabase.version)
     }
 
     @Test
@@ -189,6 +189,14 @@ class AccountDatabaseTest {
         assertEquals(listOf(reportId),db.pendingCloudReports(localId).map { it.id })
         db.markCloudReportSynced(reportId,"7e980519-bc18-4f10-a1d6-4ecc986ea04e")
         assertTrue(db.pendingCloudReports(localId).isEmpty())
+        assertEquals(1,db.pendingCloudPhotos(localId).size)
+        db.markCloudPhotoSynced(db.pendingCloudPhotos(localId).single().itemId,"user/report/photo-0.jpg")
+        assertTrue(db.pendingCloudPhotos(localId).isEmpty())
+        db.addPhotoComment(reportId,localId,"A comment",false,null)
+        val pending=db.pendingCloudComments(localId).single()
+        assertEquals("A comment",pending.body)
+        db.markCloudCommentSynced(pending.id,"13edfa86-f6b4-4c92-8a28-9ba91a2844f8")
+        assertTrue(db.pendingCloudComments(localId).isEmpty())
     }
 
     private fun storedCredentials(id: Long): Pair<ByteArray, ByteArray> {

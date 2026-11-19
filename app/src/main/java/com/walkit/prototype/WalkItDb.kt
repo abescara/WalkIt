@@ -13,8 +13,8 @@ data class Hazard(val id: Long, val ownerId: Long, val owner: String, val segmen
                   val segment: String, val title: String, val category: String,
                   val severity: Int, val details: String, val status: String)
 data class Route(val name: String, val meters: Int, val hazards: Int, val barriers: Int)
-data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>)
-data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long)
+data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>, val cloudId: String? = null)
+data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long, val authorName: String = "WalkIt user")
 data class UserProfile(
     val id: Long,
     val username: String,
@@ -25,7 +25,7 @@ data class UserProfile(
 )
 data class LeaderboardEntry(val userId: Long, val displayName: String, val username: String, val reports: Int, val comments: Int, val points: Int)
 
-class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpenHelper(context, databaseName, null, 5) {
+class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpenHelper(context, databaseName, null, 6) {
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -61,6 +61,10 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
             db.execSQL("CREATE UNIQUE INDEX users_cloud_id ON users(cloud_id)")
             if(!hasColumn(db,"photo_reports","cloud_id")) db.execSQL("ALTER TABLE photo_reports ADD COLUMN cloud_id TEXT")
         }
+        if (oldVersion < 6) {
+            if(!hasColumn(db,"photo_items","cloud_path")) db.execSQL("ALTER TABLE photo_items ADD COLUMN cloud_path TEXT")
+            if(!hasColumn(db,"photo_comments","cloud_id")) db.execSQL("ALTER TABLE photo_comments ADD COLUMN cloud_id TEXT")
+        }
     }
 
     private fun hasColumn(db: SQLiteDatabase,table: String,column: String): Boolean {
@@ -72,11 +76,11 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
 
     private fun createPhotoTables(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS photo_reports (id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, description TEXT NOT NULL, captured_time TEXT NOT NULL, location TEXT NOT NULL, created_at INTEGER NOT NULL, cloud_id TEXT)")
-        db.execSQL("CREATE TABLE IF NOT EXISTS photo_items (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, local_path TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS photo_items (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, local_path TEXT NOT NULL, cloud_path TEXT)")
     }
 
     private fun createPhotoDiscussionTable(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS photo_comments (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, anonymous INTEGER NOT NULL DEFAULT 0, attachment_path TEXT, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS photo_comments (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, anonymous INTEGER NOT NULL DEFAULT 0, attachment_path TEXT, created_at INTEGER NOT NULL, cloud_id TEXT)")
         db.execSQL("CREATE INDEX IF NOT EXISTS photo_comments_report ON photo_comments(report_id,created_at)")
     }
 
@@ -144,8 +148,49 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
         writableDatabase.update("photo_reports",ContentValues().apply { put("cloud_id",cloudId) },"id=?",arrayOf(localId.toString()))
     }
 
+    data class PendingCloudPhoto(val itemId: Long,val reportCloudId: String,val position: Int,val path: String)
+    fun pendingCloudPhotos(ownerId: Long): List<PendingCloudPhoto> = buildList {
+        readableDatabase.rawQuery("SELECT p.id,p.cloud_id,i.id,i.local_path,i.cloud_path FROM photo_reports p JOIN photo_items i ON i.report_id=p.id WHERE p.owner_id=? AND p.cloud_id IS NOT NULL ORDER BY p.id,i.id",arrayOf(ownerId.toString())).use { cursor ->
+            var reportId=-1L
+            var position=0
+            while(cursor.moveToNext()) {
+                val current=cursor.getLong(0)
+                if(current!=reportId) { reportId=current; position=0 }
+                if(cursor.isNull(4)) add(PendingCloudPhoto(cursor.getLong(2),cursor.getString(1),position,cursor.getString(3)))
+                position++
+            }
+        }
+    }
+
+    fun markCloudPhotoSynced(itemId: Long,storagePath: String) {
+        writableDatabase.update("photo_items",ContentValues().apply { put("cloud_path",storagePath) },"id=?",arrayOf(itemId.toString()))
+    }
+
+    data class PendingCloudComment(val id: Long,val reportCloudId: String,val body: String,val anonymous: Boolean,val attachmentPath: String?)
+    fun pendingCloudComments(ownerId: Long): List<PendingCloudComment> = buildList {
+        readableDatabase.rawQuery("SELECT c.id,p.cloud_id,c.body,c.anonymous,c.attachment_path FROM photo_comments c JOIN photo_reports p ON p.id=c.report_id WHERE c.owner_id=? AND p.cloud_id IS NOT NULL AND c.cloud_id IS NULL ORDER BY c.id",arrayOf(ownerId.toString())).use { cursor ->
+            while(cursor.moveToNext()) add(PendingCloudComment(cursor.getLong(0),cursor.getString(1),cursor.getString(2),cursor.getInt(3)==1,cursor.getString(4)))
+        }
+    }
+
+    fun markCloudCommentSynced(localId: Long,cloudId: String) {
+        writableDatabase.update("photo_comments",ContentValues().apply { put("cloud_id",cloudId) },"id=?",arrayOf(localId.toString()))
+    }
+
+    fun pendingPhotoComments(reportId: Long): List<PhotoComment> = buildList {
+        readableDatabase.rawQuery("SELECT id,report_id,body,anonymous,attachment_path,created_at FROM photo_comments WHERE report_id=? AND cloud_id IS NULL ORDER BY created_at",arrayOf(reportId.toString())).use { c ->
+            while(c.moveToNext()) add(PhotoComment(c.getLong(0),c.getLong(1),c.getString(2),c.getInt(3)==1,c.getString(4),c.getLong(5),"You · uploading"))
+        }
+    }
+
+    fun cloudReportIds(): Set<String> = buildSet {
+        readableDatabase.rawQuery("SELECT cloud_id FROM photo_reports WHERE cloud_id IS NOT NULL",null).use { c ->
+            while(c.moveToNext()) add(c.getString(0))
+        }
+    }
+
     fun photoReports(): List<PhotoReport> = buildList {
-        readableDatabase.rawQuery("SELECT id,description,captured_time,location FROM photo_reports ORDER BY id DESC",null).use { c ->
+        readableDatabase.rawQuery("SELECT id,description,captured_time,location,cloud_id FROM photo_reports ORDER BY id DESC",null).use { c ->
             while (c.moveToNext()) {
                 val id=c.getLong(0)
                 val photos=buildList {
@@ -153,7 +198,7 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
                         while (p.moveToNext()) add(p.getString(0))
                     }
                 }
-                add(PhotoReport(id,c.getString(1),c.getString(2),c.getString(3),photos))
+                add(PhotoReport(id,c.getString(1),c.getString(2),c.getString(3),photos,c.getString(4)))
             }
         }
     }

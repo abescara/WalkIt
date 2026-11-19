@@ -53,11 +53,13 @@ import java.net.URL
 import java.net.URLEncoder
 import android.location.Geocoder
 import org.json.JSONObject
+import org.json.JSONArray
 import com.walkit.prototype.data.UserSession
 import com.walkit.prototype.data.CloudAccount
 
 class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
+    private val sharedWorker = Executors.newFixedThreadPool(2)
     private lateinit var db: WalkItDb
     private lateinit var session: UserSession
     private lateinit var cloud: CloudAccount
@@ -173,7 +175,9 @@ class MainActivity : ComponentActivity() {
     private val routeMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
 
     private enum class Tab { MAP, COMMUNITY, FORUMS, ROUTES, REWARDS, PROFILE }
-    private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>)
+    private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>, val cloudPhotoPaths: List<String> = emptyList())
+    private val displayedCloudReports = mutableSetOf<String>()
+    private val remoteMarkers = mutableMapOf<String,org.maplibre.android.annotations.Marker>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -597,13 +601,39 @@ class MainActivity : ComponentActivity() {
 
     private fun syncCloudReports(owner: Long) {
         worker.execute {
-            val result=runCatching {
-                db.pendingCloudReports(owner).forEach { report ->
+            var failed=false
+            db.pendingCloudReports(owner).forEach { report ->
+                runCatching {
                     val remoteId=cloud.postReport(report.description,report.category,report.latitude,report.longitude)
                     db.markCloudReportSynced(report.id,remoteId)
-                }
+                    runOnUiThread {
+                        photoMarkerDetails.replaceAll { _, detail ->
+                            if(detail.report.id==report.id) detail.copy(report=detail.report.copy(cloudId=remoteId)) else detail
+                        }
+                    }
+                }.onFailure { failed=true }
             }
-            if(result.isFailure) runOnUiThread { toast("Report saved on this device. Cloud sync will retry after your next login.") }
+            db.pendingCloudPhotos(owner).forEach { photo ->
+                runCatching {
+                    val storagePath="${cloud.userId()}/${photo.reportCloudId}/photo-${photo.position}.jpg"
+                    cloud.uploadPhoto(storagePath,File(photo.path))
+                    cloud.addReportPhoto(photo.reportCloudId,photo.position,storagePath)
+                    db.markCloudPhotoSynced(photo.itemId,storagePath)
+                }.onFailure { failed=true }
+            }
+            db.pendingCloudComments(owner).forEach { comment ->
+                runCatching {
+                    val attachment=comment.attachmentPath?.let { path ->
+                        val storagePath="${cloud.userId()}/${comment.reportCloudId}/comment-${comment.id}.jpg"
+                        cloud.uploadPhoto(storagePath,File(path))
+                        storagePath
+                    }
+                    val remoteId=cloud.postMapComment(comment.reportCloudId,comment.body,comment.anonymous,attachment)
+                    db.markCloudCommentSynced(comment.id,remoteId)
+                }.onFailure { failed=true }
+            }
+            if(failed) runOnUiThread { toast("Report saved on this device. Sharing will retry after your next login.") }
+            else runOnUiThread { currentMap?.let(::loadSharedReports) }
         }
     }
 
@@ -771,12 +801,13 @@ class MainActivity : ComponentActivity() {
                 maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
                 maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
                 lastUserLocation?.let { addUserLocationMarker(it) }
-                photoMarkerDetails.clear()
+                photoMarkerDetails.clear(); displayedCloudReports.clear(); remoteMarkers.clear()
                 maplibreMap.setOnMarkerClickListener { marker ->
                     photoMarkerDetails[marker.id]?.let { showPhotoDetails(it) }
                     true
                 }
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
+                loadSharedReports(maplibreMap)
             }
         }
         if(photoLocationPicking && lastUserLocation==null) showMyLocation()
@@ -1285,7 +1316,62 @@ class MainActivity : ComponentActivity() {
         dialog.window?.setLayout(-1,-2)
     }
 
-    private fun addPhotoMarkers(report: PhotoReport) {
+    private fun cachedSharedPhoto(storagePath: String): String? = runCatching {
+        val folder=File(cacheDir,"shared-report-photos").apply { mkdirs() }
+        val name=java.util.UUID.nameUUIDFromBytes(storagePath.toByteArray()).toString()+".jpg"
+        val target=File(folder,name)
+        if(!target.exists() || target.length()==0L) {
+            val pending=File(folder,"$name.${Thread.currentThread().id}.pending")
+            pending.writeBytes(cloud.downloadPhoto(storagePath))
+            if(!target.exists()) pending.renameTo(target) else pending.delete()
+        }
+        target.absolutePath.takeIf { target.exists() && target.length()>0 }
+    }.getOrNull()
+
+    private fun loadSharedReports(map: org.maplibre.android.maps.MapLibreMap) {
+        sharedWorker.execute {
+            val result=runCatching {
+                val localIds=db.cloudReportIds()
+                val photos=cloud.reportPhotos()
+                val paths=mutableMapOf<String,MutableList<Pair<Int,String>>>()
+                for(index in 0 until photos.length()) {
+                    val photo=photos.getJSONObject(index)
+                    paths.getOrPut(photo.getString("report_id")) { mutableListOf() }
+                        .add(photo.optInt("position") to photo.getString("storage_path"))
+                }
+                val reports=cloud.mapReports()
+                for(index in 0 until reports.length()) {
+                    val item=reports.getJSONObject(index)
+                    val cloudId=item.getString("id")
+                    if(cloudId in localIds) continue
+                    val observed=runCatching { java.time.OffsetDateTime.parse(item.getString("created_at")).toInstant().toEpochMilli() }
+                        .getOrDefault(System.currentTimeMillis())
+                    val report=PhotoReport(-1,item.getString("description"),
+                        SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(Date(observed)),
+                        "${item.getDouble("latitude")}, ${item.getDouble("longitude")}",emptyList(),cloudId)
+                    val photoPaths=paths[cloudId].orEmpty().sortedBy { it.first }.map { it.second }
+                    runOnUiThread {
+                        if(currentMap===map && currentStyleReady && displayedCloudReports.add(cloudId))
+                            addPhotoMarkers(report,photoPaths)
+                    }
+                    val firstPath=photoPaths.firstOrNull() ?: continue
+                    sharedWorker.execute {
+                        val cached=cachedSharedPhoto(firstPath) ?: return@execute
+                        runOnUiThread {
+                            if(currentMap!==map || !currentStyleReady) return@runOnUiThread
+                            val previous=remoteMarkers.remove(cloudId) ?: return@runOnUiThread
+                            map.removeMarker(previous)
+                            photoMarkerDetails.remove(previous.id)
+                            addPhotoMarkers(report.copy(photos=listOf(cached)),photoPaths)
+                        }
+                    }
+                }
+            }
+            if(result.isFailure) runOnUiThread { toast("Could not refresh shared map reports. Check your connection.") }
+        }
+    }
+
+    private fun addPhotoMarkers(report: PhotoReport,cloudPhotoPaths: List<String> = emptyList()) {
         val map=currentMap ?: return
         if(!currentStyleReady) return
         val coordinates=report.location.split(",").map { it.trim().toDoubleOrNull() ?: return }
@@ -1295,7 +1381,8 @@ class MainActivity : ComponentActivity() {
         val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it) } ?: makePhotoPlaceholder()
         val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
         val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
-        photoMarkerDetails[marker.id]=PhotoMarkerDetail(report,photos)
+        photoMarkerDetails[marker.id]=PhotoMarkerDetail(report,photos,cloudPhotoPaths)
+        if(report.id<0 && report.cloudId!=null) remoteMarkers[report.cloudId]=marker
     }
 
     private fun showPhotoDetails(detail: PhotoMarkerDetail) {
@@ -1321,9 +1408,10 @@ class MainActivity : ComponentActivity() {
         else hero.setImageBitmap(makePhotoPlaceholder())
         sheet.addView(hero,LinearLayout.LayoutParams(-1,dp(180)).apply { bottomMargin=dp(10) })
 
-        if(detail.photos.size>1) {
-            val strip=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-            detail.photos.forEach { path ->
+        val strip=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        fun showPhotoStrip(paths: List<String>) {
+            strip.removeAllViews()
+            paths.forEach { path ->
                 val thumbnail=ImageView(this).apply {
                     setImageBitmap(loadPhotoPreview(path,dp(120)))
                     scaleType=ImageView.ScaleType.CENTER_CROP
@@ -1334,12 +1422,14 @@ class MainActivity : ComponentActivity() {
                 }
                 strip.addView(thumbnail,LinearLayout.LayoutParams(dp(62),dp(62)).apply { rightMargin=dp(8) })
             }
-            val photosScroll=HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled=false
-                addView(strip)
-            }
-            sheet.addView(photosScroll,LinearLayout.LayoutParams(-1,dp(68)).apply { bottomMargin=dp(8) })
         }
+        val photosScroll=HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled=false
+            addView(strip)
+            visibility=if(detail.photos.size>1) View.VISIBLE else View.GONE
+        }
+        showPhotoStrip(detail.photos)
+        sheet.addView(photosScroll,LinearLayout.LayoutParams(-1,dp(68)).apply { bottomMargin=dp(8) })
 
         sheet.addView(TextView(this).apply {
             text=report.description
@@ -1361,9 +1451,11 @@ class MainActivity : ComponentActivity() {
         val comments=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val commentsScroll=ScrollView(this).apply { isFillViewport=true; addView(comments) }
         sheet.addView(commentsScroll,LinearLayout.LayoutParams(-1,0,1f))
+        val dialog=Dialog(this)
+        photoDialog=dialog
 
-        fun loadComments() {
-            runDb({ db.photoComments(report.id) }) { items ->
+        fun renderComments(items: List<PhotoComment>) {
+                if(photoDialog!==dialog) return
                 comments.removeAllViews()
                 if(items.isEmpty()) comments.addView(TextView(this).apply {
                     text="No comments yet. Start the discussion."; textSize=14f; setTextColor(Color.rgb(107,114,128))
@@ -1376,7 +1468,7 @@ class MainActivity : ComponentActivity() {
                     }
                     entry.addView(TextView(this).apply {
                         val posted=SimpleDateFormat("MMM d · h:mm a",Locale.getDefault()).format(Date(item.createdAt))
-                        text="${if(item.anonymous) "Anonymous" else "WalkIt user"}  ·  $posted"
+                        text="${if(item.anonymous) "Anonymous" else item.authorName}  ·  $posted"
                         textSize=12f; setTextColor(Color.rgb(107,114,128))
                     })
                     if(item.text.isNotBlank()) entry.addView(TextView(this).apply {
@@ -1389,6 +1481,29 @@ class MainActivity : ComponentActivity() {
                         },LinearLayout.LayoutParams(-1,dp(120)).apply { topMargin=dp(8) })
                     }
                     comments.addView(entry,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(8) })
+                }
+        }
+        fun loadComments() {
+            if(report.cloudId==null) {
+                runDb({ db.photoComments(report.id) }) { renderComments(it) }
+                return
+            }
+            sharedWorker.execute {
+                val pending=if(report.id>0) db.pendingPhotoComments(report.id) else emptyList()
+                val remote=runCatching {
+                    val rows=cloud.mapComments(report.cloudId)
+                    (0 until rows.length()).map { index ->
+                        val item=rows.getJSONObject(index)
+                        val posted=runCatching { java.time.OffsetDateTime.parse(item.getString("created_at")).toInstant().toEpochMilli() }
+                            .getOrDefault(System.currentTimeMillis())
+                        val path=item.optString("attachment_path").takeIf { it.isNotBlank() }?.let(::cachedSharedPhoto)
+                        PhotoComment(-1,report.id,item.optString("body"),item.optBoolean("anonymous"),path,posted,
+                            item.optString("display_name").ifBlank { "WalkIt user" })
+                    }
+                }
+                runOnUiThread {
+                    if(remote.isFailure) toast("Could not refresh shared comments.")
+                    renderComments((remote.getOrDefault(emptyList())+pending).sortedBy { it.createdAt })
                 }
             }
         }
@@ -1418,8 +1533,6 @@ class MainActivity : ComponentActivity() {
         composer.addView(post)
         sheet.addView(composer)
 
-        val dialog=Dialog(this)
-        photoDialog=dialog
         selectedDiscussionPhoto=null
         discussionPhotoPreview=preview
         post.setOnClickListener {
@@ -1429,12 +1542,39 @@ class MainActivity : ComponentActivity() {
                 return@setOnClickListener
             }
             post.isEnabled=false
-            runDb({ db.addPhotoComment(report.id,owner,commentInput.text.toString(),anonymous.isChecked,selectedDiscussionPhoto) }) {
-                commentInput.setText("")
-                selectedDiscussionPhoto=null
-                preview.setImageDrawable(null)
-                post.isEnabled=true
-                loadComments()
+            val body=commentInput.text.toString()
+            val anonymousPost=anonymous.isChecked
+            val attachment=selectedDiscussionPhoto
+            if(report.id>0) {
+                runDb({ db.addPhotoComment(report.id,owner,body,anonymousPost,attachment) }) {
+                    commentInput.setText("")
+                    selectedDiscussionPhoto=null
+                    preview.setImageDrawable(null)
+                    post.isEnabled=true
+                    loadComments()
+                    syncCloudReports(owner)
+                }
+            } else {
+                val cloudId=report.cloudId ?: return@setOnClickListener
+                sharedWorker.execute {
+                    val result=runCatching {
+                        val remotePhoto=attachment?.let { path ->
+                            val storagePath="${cloud.userId()}/$cloudId/comment-${java.util.UUID.randomUUID()}.jpg"
+                            cloud.uploadPhoto(storagePath,File(path))
+                            storagePath
+                        }
+                        cloud.postMapComment(cloudId,body,anonymousPost,remotePhoto)
+                    }
+                    runOnUiThread {
+                        post.isEnabled=true
+                        result.fold({
+                            commentInput.setText("")
+                            selectedDiscussionPhoto=null
+                            preview.setImageDrawable(null)
+                            loadComments()
+                        },{ toast(it.message ?: "Could not post this comment.") })
+                    }
+                }
             }
         }
         dialog.setContentView(sheet)
@@ -1448,6 +1588,15 @@ class MainActivity : ComponentActivity() {
         }
         dialog.setOnDismissListener { if(photoDialog===dialog) photoDialog=null; discussionPhotoPreview=null; selectedDiscussionPhoto=null }
         dialog.show()
+        if(detail.cloudPhotoPaths.isNotEmpty()) sharedWorker.execute {
+            val paths=detail.cloudPhotoPaths.mapNotNull(::cachedSharedPhoto)
+            runOnUiThread {
+                if(photoDialog!==dialog || paths.isEmpty()) return@runOnUiThread
+                hero.setImageBitmap(loadPhotoPreview(paths.first(),dp(420)))
+                showPhotoStrip(paths)
+                photosScroll.visibility=if(paths.size>1) View.VISIBLE else View.GONE
+            }
+        }
         dialog.window?.setLayout(-1,(resources.displayMetrics.heightPixels*0.88f).toInt())
     }
 
@@ -1536,7 +1685,7 @@ class MainActivity : ComponentActivity() {
 
     private fun disposeMap() {
         currentStyleReady=false; currentMap=null
-        userLocationMarker=null; photoMarkerDetails.clear()
+        userLocationMarker=null; photoMarkerDetails.clear(); displayedCloudReports.clear(); remoteMarkers.clear()
         routeLine=null; routeMarkers.clear(); routePanelView=null
         routeOriginField=null; routeDestinationField=null
         mapView?.onPause(); mapView?.onStop(); mapView?.onDestroy(); mapView=null
@@ -1561,7 +1710,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         pendingLocationListener?.let { locationManager?.removeUpdates(it) }
         pendingLocationListener=null
-        disposeMap(); worker.shutdown(); db.close(); super.onDestroy()
+        disposeMap(); worker.shutdown(); sharedWorker.shutdown(); db.close(); super.onDestroy()
     }
 
     companion object { private const val REQUEST_CAMERA_PERMISSION=22; private const val REQUEST_LOCATION_PERMISSION=23 }
