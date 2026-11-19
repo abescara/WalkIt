@@ -10,4 +10,3 @@ Existing device-only accounts cannot be copied into Supabase as passwords becaus
 4. Install the feature branch APK on two devices, register different email addresses, confirm each email, add reports, and confirm both accounts appear on the leaderboard.
 
 The schema uses authenticated row policies. Reports are saved locally and their text, category, and location are uploaded to Supabase; failed uploads retry after the next login. The leaderboard grants 10 points for a synced report and 2 for a synced comment. Comment and photo file synchronization remain separate work, so comment points and report photos are currently limited to the original device.
-

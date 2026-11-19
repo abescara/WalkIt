@@ -308,9 +308,8 @@ class MainActivity : ComponentActivity() {
 
     private fun forwardMapGesture(web: WebView,map: MapView,event: MotionEvent): Boolean {
         if(event.actionMasked==MotionEvent.ACTION_DOWN) {
-            val scale=minOf(web.width/390f,web.height/844f)
-            val verticalOffset=(web.height-844f*scale)/2f
-            val designY=(event.y-verticalOffset)/scale
+            val scale=web.width/390f
+            val designY=event.y/scale
             forwardingMapGesture=designY in 158f..(if(currentWebScreen=="Routes") 460f else 738f)
         }
         if(!forwardingMapGesture) return false
@@ -790,7 +789,7 @@ class MainActivity : ComponentActivity() {
                 return LatLng(result.latitude,result.longitude)
         } catch (_: Exception) {}
         return try {
-            val url="https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ph&q=${URLEncoder.encode(query,"UTF-8")}" 
+            val url="https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ph&q=${URLEncoder.encode(query,"UTF-8")}"
             val connection=(URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout=10_000; readTimeout=15_000
                 setRequestProperty("User-Agent","WalkItPrototype/1.0 (student accessibility map)")

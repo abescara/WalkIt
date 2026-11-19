@@ -46,6 +46,3 @@ Sam Denielle Arias; Helijah Sephreen Coo; Angel John Escara; Daniel Kenneth Eugi
 ## License
 
 No license has been selected. Contact the project team before reusing the material.
-
-
-

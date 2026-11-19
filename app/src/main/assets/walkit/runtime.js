@@ -105,8 +105,9 @@
     const input=(id,label,type="text",value="")=>`<label style="display:block;margin:14px 0 5px;font-size:13px;font-weight:600">${label}</label><input id="${id}" type="${type}" value="${escapeHtml(value)}" style="width:100%;height:48px;border:1px solid #d1d5db;border-radius:14px;padding:0 14px;box-sizing:border-box;font:15px Inter,sans-serif;background:#fff;color:#111">`;
     const button=(id,label,primary=true)=>`<button id="${id}" style="width:100%;height:48px;margin-top:16px;border:0;border-radius:24px;background:${primary?'#5fbe2a':'#f0f2f0'};color:#17230f;font-size:15px;font-weight:700">${label}</button>`;
     const shell=(title,content)=>`<div style="position:absolute;inset:0;background:#f8faf7;color:#17230f;font:14px Inter,sans-serif;overflow-y:auto"><div style="padding:34px 26px 30px"><img src="../images/logo.png" alt="Walk It" style="width:38px;height:52px;object-fit:contain"><h1 style="font-size:25px;margin:18px 0 12px">${title}</h1>${content}<div id="account-message" role="status" style="min-height:22px;margin-top:14px;color:#b42318"></div></div></div>`;
-    if (screenName==="Login") canvas.innerHTML=shell("Welcome back",`<p>Log in to WalkIt with your email.</p>${input("account-email","Email","email")}${input("account-password","Password","password")}${button("login-submit","Log in")}${button("open-signup","Create an account",false)}`);
-    if (screenName==="Signup") canvas.innerHTML=shell("Create account",`${input("account-name","Display name")}${input("account-username","Username")}${input("account-email","Email","email")}${input("account-password","Password (12 or more characters)","password")}${input("account-confirm","Confirm password","password")}${button("signup-submit","Create account")}${button("open-login","Back to login",false)}`);
+    const showPassword=`<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px"><input id="show-account-password" type="checkbox"> Show password</label>`;
+    if (screenName==="Login") canvas.innerHTML=shell("Welcome back",`<p>Log in to WalkIt with your email.</p>${input("account-email","Email","email")}${input("account-password","Password","password")}${showPassword}${button("login-submit","Log in")}${button("open-signup","Create an account",false)}`);
+    if (screenName==="Signup") canvas.innerHTML=shell("Create account",`${input("account-name","Display name")}${input("account-username","Username")}${input("account-email","Email","email")}${input("account-password","Password (12 or more characters)","password")}${input("account-confirm","Confirm password","password")}${showPassword}${button("signup-submit","Create account")}${button("open-login","Back to login",false)}`);
     if (screenName==="Profile" || screenName==="Edit_Profile") {
       let profile={}; try { profile=JSON.parse(bridge.getProfile()); } catch (_) {}
       canvas.innerHTML=shell("Profile",`<p style="color:#54615a">@${escapeHtml(profile.username||"")}</p><p>${profile.reports||0} reports · ${profile.comments||0} comments</p>${input("profile-name","Display name","text",profile.displayName||"")}<label style="display:block;margin:14px 0 5px;font-size:13px;font-weight:600">Bio</label><textarea id="profile-bio" maxlength="300" style="width:100%;height:90px;border:1px solid #d1d5db;border-radius:14px;padding:12px;box-sizing:border-box;font:15px Inter,sans-serif">${escapeHtml(profile.bio||"")}</textarea>${button("profile-save","Save profile")}${button("profile-leaderboard","Leaderboard",false)}${button("profile-map","Back to map",false)}${button("profile-logout","Log out",false)}`);
@@ -137,11 +138,20 @@
     const lower = label.toLowerCase();
     if(button.id==="open-signup") { bridge.navigate("signup"); return; }
     if(button.id==="open-login") { bridge.navigate("login"); return; }
-    if(button.id==="login-submit") { bridge.login(document.getElementById("account-email").value,document.getElementById("account-password").value); return; }
+    if(button.id==="login-submit") {
+      const email=document.getElementById("account-email").value.trim();
+      const password=document.getElementById("account-password").value;
+      if(!email || !password) { window.walkItAccountMessage("Enter your email and password."); return; }
+      button.disabled=true; bridge.login(email,password); return;
+    }
     if(button.id==="signup-submit") {
       const password=document.getElementById("account-password").value;
+      const email=document.getElementById("account-email").value.trim();
+      const username=document.getElementById("account-username").value.trim();
+      const name=document.getElementById("account-name").value.trim();
+      if(!email || !username || !name || !password) { window.walkItAccountMessage("Complete every field to create your account."); return; }
       if(password!==document.getElementById("account-confirm").value) { window.walkItAccountMessage("Passwords do not match."); return; }
-      bridge.register(document.getElementById("account-email").value,document.getElementById("account-username").value,password,document.getElementById("account-name").value); return;
+      button.disabled=true; bridge.register(email,username,password,name); return;
     }
     if(button.id==="profile-save") { bridge.saveProfile(document.getElementById("profile-name").value,document.getElementById("profile-bio").value); return; }
     if(button.id==="profile-logout") { bridge.logout(); return; }
@@ -250,11 +260,24 @@
     }
   });
 
+  document.addEventListener("change",function(event){
+    if(event.target?.id==="show-account-password") {
+      ["account-password","account-confirm"].forEach(id=>{
+        const field=document.getElementById(id);
+        if(field) field.type=event.target.checked ? "text" : "password";
+      });
+    }
+  });
+
   window.addEventListener("resize", sizeToDevice);
   window.walkItRefreshDraft = hydrateReport;
   window.walkItRefreshPreview = hydratePreview;
   window.walkItClearDraft = clearDraft;
-  window.walkItAccountMessage = function(message) { const view=document.getElementById("account-message"); if(view) view.textContent=message; };
+  window.walkItAccountMessage = function(message) {
+    const view=document.getElementById("account-message");
+    if(view) view.textContent=message;
+    document.querySelectorAll("#login-submit,#signup-submit").forEach(button=>button.disabled=false);
+  };
   window.walkItRouteReady = function(summary,warning) {
     const status=document.getElementById("route-status");
     const details=document.getElementById("route-summary");

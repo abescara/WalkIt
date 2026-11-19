@@ -19,6 +19,3 @@ Reports and photos are stored locally first. Report text, category, and location
 Build artifact
 
 The repository includes a debug APK at artifacts/WalkIt-debug.apk. This is a development build of the prototype.
-
-
-
