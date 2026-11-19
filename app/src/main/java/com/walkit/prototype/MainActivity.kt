@@ -386,6 +386,14 @@ class MainActivity : ComponentActivity() {
             }
         }.toString()
         @JavascriptInterface fun getCurrentUserId(): String = cloud.userId() ?: ""
+        @JavascriptInterface fun getRewards(): String = runCatching {
+            val id=cloud.userId() ?: error("Log in to view rewards.")
+            val rows=cloud.leaderboard()
+            val entry=(0 until rows.length()).mapNotNull(rows::optJSONObject)
+                .firstOrNull { it.optString("id")==id }
+            JSONObject().put("reports",entry?.optInt("reports") ?: 0)
+                .put("points",entry?.optInt("points") ?: 0)
+        }.getOrElse { JSONObject().put("error",it.message ?: "Rewards are unavailable right now.") }.toString()
         @JavascriptInterface fun navigate(destination: String) = runOnUiThread {
             when(destination.lowercase()) {
                 "map", "main" -> {

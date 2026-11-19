@@ -12,7 +12,7 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 - On-device SQLite database through `SQLiteOpenHelper`
 - Account-owned hazard reports with local persistence and owner-restricted changes
 - Predefined pathway segments and routes, route comparison, saved routes, and preferences
-- A shared leaderboard based on uploaded reports; badges remain planned
+- A shared leaderboard and report badges based on reports uploaded to Supabase; route, detour, and forum badges are shown as upcoming
 - Supabase email/password accounts with local report storage and shared report metadata
 - Interactive MapLibre street map with road labels, OpenStreetMap data attribution, current-location control, photo-location picker, and tappable report markers
 - Expandable point-to-point route planner; route calculation needs an internet connection and uses the public BRouter service

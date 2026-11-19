@@ -122,6 +122,41 @@
 
   function escapeHtml(value) { return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char])); }
 
+  function renderRewards() {
+    if (!bridge || screenName !== "Rewards") return;
+    const canvas=document.querySelector(".wrap > div");
+    const content=canvas && Array.from(canvas.children).find(item=>item.style.top==="168px");
+    if (!content) return;
+    const dark=fileName.endsWith("_Dark");
+    const foreground=dark ? "#f2f2f2" : "#1a1a1a";
+    const muted=dark ? "#b9b9b9" : "#626262";
+    const card=dark ? "#242424" : "#fff";
+    let data;
+    try { data=JSON.parse(bridge.getRewards()); }
+    catch (_) { data={error:"Rewards are unavailable right now."}; }
+    content.style.cssText += ";bottom:72px;overflow-y:auto;padding-bottom:18px;scrollbar-width:none";
+    if (data.error) {
+      content.innerHTML=`<div style="padding:20px;border-radius:16px;background:${card};color:${foreground}">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    const reports=Math.max(0,Number(data.reports)||0);
+    const points=Math.max(0,Number(data.points)||0);
+    const tiers=[{name:"Bronze",start:0},{name:"Silver",start:50},{name:"Gold",start:100},{name:"Platinum",start:200}];
+    const tier=tiers.filter(item=>points>=item.start).pop();
+    const next=tiers[tiers.indexOf(tier)+1];
+    const progress=next ? Math.min(100,Math.round((points-tier.start)/(next.start-tier.start)*100)) : 100;
+    const badges=[
+      {name:"First Report",goal:"Submit 1 report",earned:reports>=1,progress:`${Math.min(reports,1)} / 1`},
+      {name:"Eagle Eye",goal:"Submit 10 reports",earned:reports>=10,progress:`${Math.min(reports,10)} / 10`},
+      {name:"Guardian",goal:"Submit 50 reports",earned:reports>=50,progress:`${Math.min(reports,50)} / 50`},
+      {name:"Verifier",goal:"Route confirmations",upcoming:true},
+      {name:"Detour Pro",goal:"Detour tracking",upcoming:true},
+      {name:"Voice",goal:"Forum posts",upcoming:true}
+    ];
+    const badgeHtml=badges.map(badge=>`<div style="min-width:0;padding:12px 5px;border:1px solid ${dark?'#444':'#e3e3e3'};border-radius:16px;text-align:center;background:${card};color:${foreground};opacity:${badge.earned?1:0.65}"><div style="width:44px;height:44px;margin:0 auto 7px;border-radius:50%;background:${badge.earned?'#5fbe2a':dark?'#555':'#ddd'};display:grid;place-items:center"><img src="../images/pin.png" alt="" style="width:24px;height:24px;filter:brightness(0) invert(1)"></div><div style="font-size:12px;font-weight:700">${badge.name}</div><div style="font-size:10px;color:${muted};margin-top:3px">${badge.goal}</div><div style="font-size:10px;color:${muted};margin-top:5px">${badge.upcoming?'Coming soon':badge.earned?'Earned':badge.progress}</div></div>`).join("");
+    content.innerHTML=`<div style="padding:16px;border-radius:18px;background:#2b2b2b;color:#fff"><div style="font-size:12px;color:#c8c8c8">Current title</div><div style="font-size:22px;font-weight:700">${tier.name}</div><div style="margin-top:10px;height:8px;border-radius:4px;background:#555"><div style="width:${progress}%;height:8px;border-radius:4px;background:#5fbe2a"></div></div><div style="font-size:12px;color:#c8c8c8;margin-top:7px">${next?`${points} points · ${next.start-points} to ${next.name}`:`${points} points · highest title reached`}</div></div><h2 style="font-size:15px;margin:18px 0 10px;color:${foreground}">Badges</h2><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px">${badgeHtml}</div><h2 style="font-size:15px;margin:18px 0 8px;color:${foreground}">Ways to earn</h2><p style="font-size:12px;line-height:1.5;color:${muted};margin:0">Submit a map report to earn 10 points. Your badges update when the report reaches the shared leaderboard.</p>`;
+  }
+
   document.addEventListener("click", function (event) {
     const locationSearch = event.target.closest("#search-location");
     if (locationSearch && bridge) { bridge.searchLocation(); return; }
@@ -305,6 +340,7 @@
   };
   sizeToDevice();
   renderAccountPage();
+  renderRewards();
   hydrateReport();
   hydratePreview();
   if(screenName === "Routes" && bridge) {
