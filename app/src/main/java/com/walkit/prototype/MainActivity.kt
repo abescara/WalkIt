@@ -83,6 +83,9 @@ class MainActivity : ComponentActivity() {
     private var lastSubmittedLocation = ""
     private var forwardingMapGesture = false
     private var searchOverlayActive = false
+    private val placeSuggestionCache = mutableMapOf<String,org.json.JSONArray>()
+    private val selectedPlaceCoordinates = mutableMapOf<String,LatLng>()
+    private var lastPlaceSuggestionRequest = 0L
     private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if(uris.isNotEmpty()) worker.execute {
             val imported=uris.mapNotNull { uri ->
@@ -205,10 +208,12 @@ class MainActivity : ComponentActivity() {
     private val hiddenPhotoDetails = mutableListOf<PhotoMarkerDetail>()
     private val queuedSharedPhotos = mutableSetOf<String>()
     private val photoMarkerMinZoom = 14.0
+    private val legacyMapReportCutoff = java.time.Instant.parse("2026-11-19T22:14:11Z").toEpochMilli()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = WalkItDb(this)
+        db.deleteLegacyPhotoReports(legacyMapReportCutoff)
         session=UserSession(this)
         cloud=CloudAccount(this)
         darkThemeEnabled=getSharedPreferences("walkit-ui",MODE_PRIVATE).getBoolean("dark_theme",false)
@@ -830,12 +835,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun placeSuggestions(query: String): org.json.JSONArray {
-        val results=org.json.JSONArray()
-        val matches=Geocoder(this,Locale("en","PH")).getFromLocationName(query,5).orEmpty()
-        matches.filter { it.latitude in 4.0..21.8 && it.longitude in 116.0..127.0 }.forEach { address ->
-            results.put(JSONObject().put("display_name",address.getAddressLine(0) ?: address.featureName ?: query)
-                .put("lat",address.latitude).put("lon",address.longitude))
+        val key=query.lowercase(Locale.ROOT)
+        placeSuggestionCache[key]?.let { return it }
+        val delay=1000L-(System.currentTimeMillis()-lastPlaceSuggestionRequest)
+        if(delay>0) Thread.sleep(delay)
+        lastPlaceSuggestionRequest=System.currentTimeMillis()
+        val bias=lastUserLocation?.let { "&lat=${it.latitude}&lon=${it.longitude}" }.orEmpty()
+        val url="https://photon.komoot.io/api/?q=${URLEncoder.encode(query,"UTF-8")}&countrycode=PH&limit=5$bias"
+        val connection=(URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout=8_000; readTimeout=10_000
+            setRequestProperty("User-Agent","WalkItPrototype/1.0 (student accessibility map)")
         }
+        val body=try { connection.inputStream.bufferedReader().use { it.readText() } } finally { connection.disconnect() }
+        val features=JSONObject(body).getJSONArray("features")
+        val results=org.json.JSONArray()
+        for(index in 0 until features.length()) {
+            val feature=features.getJSONObject(index)
+            val properties=feature.getJSONObject("properties")
+            val coordinates=feature.getJSONObject("geometry").getJSONArray("coordinates")
+            val latitude=coordinates.getDouble(1); val longitude=coordinates.getDouble(0)
+            if(latitude !in 4.0..21.8 || longitude !in 116.0..127.0) continue
+            val label=listOf(properties.optString("name"),properties.optString("city"),properties.optString("state"))
+                .filter { it.isNotBlank() }.distinct().joinToString(", ")
+            selectedPlaceCoordinates[label]=LatLng(latitude,longitude)
+            results.put(JSONObject().put("display_name",label).put("lat",latitude).put("lon",longitude))
+        }
+        if(placeSuggestionCache.size>50) placeSuggestionCache.clear()
+        placeSuggestionCache[key]=results
         return results
     }
 
@@ -1094,6 +1120,7 @@ class MainActivity : ComponentActivity() {
     private fun formatCoordinate(point: LatLng) = "${"%.6f".format(Locale.US,point.latitude)}, ${"%.6f".format(Locale.US,point.longitude)}"
 
     private fun resolvePlace(query: String): LatLng? {
+        selectedPlaceCoordinates[query]?.let { return it }
         val coordinates=query.split(",").map { it.trim().toDoubleOrNull() }
         if(coordinates.size==2 && coordinates[0]!=null && coordinates[1]!=null) {
             val lat=coordinates[0]!!; val lon=coordinates[1]!!
@@ -1577,9 +1604,11 @@ class MainActivity : ComponentActivity() {
                     if(cloudId in localIds) continue
                     val observed=runCatching { java.time.OffsetDateTime.parse(item.getString("created_at")).toInstant().toEpochMilli() }
                         .getOrDefault(System.currentTimeMillis())
+                    if(observed<legacyMapReportCutoff) continue
                     val report=PhotoReport(-1,item.getString("description"),
                         SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(Date(observed)),
-                        "${item.getDouble("latitude")}, ${item.getDouble("longitude")}",emptyList(),cloudId)
+                        "${item.getDouble("latitude")}, ${item.getDouble("longitude")}",emptyList(),cloudId,
+                        ownerCloudId=item.optString("owner_id"))
                     val photoPaths=paths[cloudId].orEmpty().sortedBy { it.first }.map { it.second }
                     runOnUiThread {
                         if(currentMap===map && currentStyleReady && displayedCloudReports.add(cloudId))
@@ -1635,7 +1664,7 @@ class MainActivity : ComponentActivity() {
             hiddenPhotoDetails.add(PhotoMarkerDetail(report,photos,cloudPhotoPaths))
             return
         }
-        val markerSize=if(report.id<0) 42 else 48
+        val markerSize=if(report.id<0) 30 else 34
         val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it,markerSize) } ?: makePhotoPlaceholder(markerSize)
         val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
         val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
@@ -1715,6 +1744,14 @@ class MainActivity : ComponentActivity() {
             setTextColor(Color.rgb(107,114,128))
             setPadding(0,dp(5),0,dp(2))
         })
+        if((report.ownerId!=null && report.ownerId==userId) ||
+            (report.ownerCloudId!=null && report.ownerCloudId==cloud.userId())) {
+            sheet.addView(TextView(this).apply {
+                text="Delete report"; textSize=13f; setTextColor(Color.rgb(190,50,40))
+                setPadding(0,dp(8),0,dp(4)); contentDescription="Delete this map report"
+                setOnClickListener { confirmDeleteMapReport(report) }
+            })
+        }
 
         var commentReactionRows=org.json.JSONArray()
         var reactionsAvailable=false
@@ -1948,6 +1985,32 @@ class MainActivity : ComponentActivity() {
             }
         }
         dialog.window?.setLayout(-1,(resources.displayMetrics.heightPixels*0.72f).toInt())
+    }
+
+    private fun confirmDeleteMapReport(report: PhotoReport) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete this report?")
+            .setMessage("The map report and its discussion will be removed for everyone. This cannot be undone.")
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Delete") { _,_ ->
+                val owner=userId ?: return@setPositiveButton
+                worker.execute {
+                    val result=runCatching {
+                        report.cloudId?.let(cloud::deleteMapReport)
+                        if(report.id>0) db.deletePhotoReport(report.id,owner)
+                    }
+                    runOnUiThread {
+                        result.fold({
+                            photoDialog?.dismiss()
+                            val matching=photoMarkerDetails.filterValues { it.report.id==report.id && report.id>0 || it.report.cloudId==report.cloudId && report.cloudId!=null }
+                            matching.forEach { (id,_) -> photoMarkers.remove(id)?.let { marker -> currentMap?.removeMarker(marker) }; photoMarkerDetails.remove(id) }
+                            hiddenPhotoDetails.removeAll { it.report.id==report.id && report.id>0 || it.report.cloudId==report.cloudId && report.cloudId!=null }
+                            report.cloudId?.let { remoteMarkers.remove(it); displayedCloudReports.remove(it) }
+                            toast("Report removed from the map.")
+                        },{ toast(it.message ?: "Could not remove this report.") })
+                    }
+                }
+            }.show()
     }
 
     private fun loadPhotoPreview(path: String,size: Int): Bitmap? = try {

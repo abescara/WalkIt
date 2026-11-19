@@ -204,6 +204,13 @@ class CloudAccount(context: Context) {
             ?: error("The server did not return a report ID.")
     }
 
+    fun deleteMapReport(reportId: String) {
+        require(reportId.matches(Regex("[0-9a-f-]{36}"))) { "Invalid map report." }
+        val owner=userId() ?: error("Log in to remove your report.")
+        val removed=requestArray("DELETE","/rest/v1/reports?id=eq.$reportId&owner_id=eq.$owner&select=id",null,true,true)
+        require(removed.length()==1) { "Only the report owner can remove it." }
+    }
+
     fun mapReports(): JSONArray = requestArray("GET",
         "/rest/v1/reports?select=id,owner_id,description,category,latitude,longitude,created_at&order=created_at.desc&limit=100",null,true)
 

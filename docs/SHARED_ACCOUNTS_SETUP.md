@@ -15,6 +15,7 @@ Existing device-only accounts cannot be copied into Supabase as passwords becaus
 9. Run [`supabase/06_friends.sql`](../supabase/06_friends.sql) in the SQL Editor to enable friend requests and accepted friendships. Until this is applied, the Friends tab shows a setup message.
 10. Run [`supabase/07_report_conversations.sql`](../supabase/07_report_conversations.sql) in the SQL Editor to enable threaded map-report replies, reactions, and shared profile photos. Users who already chose a profile photo should reopen the updated app while signed in, or choose the photo again, to upload it.
 11. Run [`supabase/08_forum_media_votes.sql`](../supabase/08_forum_media_votes.sql) in the SQL Editor to enable forum post photos and upvotes/downvotes.
+12. If the team intends to remove all shared map reports created before 2026-11-20 06:14:11 Asia/Manila, run the one-time [`supabase/09_clear_legacy_map_reports.sql`](../supabase/09_clear_legacy_map_reports.sql) in the SQL Editor. It permanently deletes those report rows and their related comments; Storage image objects require separate cleanup.
 
 ## Google and Apple sign-in
 

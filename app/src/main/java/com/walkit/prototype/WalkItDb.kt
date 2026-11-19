@@ -13,7 +13,7 @@ data class Hazard(val id: Long, val ownerId: Long, val owner: String, val segmen
                   val segment: String, val title: String, val category: String,
                   val severity: Int, val details: String, val status: String)
 data class Route(val name: String, val meters: Int, val hazards: Int, val barriers: Int)
-data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>, val cloudId: String? = null)
+data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>, val cloudId: String? = null, val ownerId: Long? = null, val ownerCloudId: String? = null)
 data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long, val authorName: String = "WalkIt user", val cloudId: String? = null, val parentId: String? = null, val avatarPath: String? = null, val ownerCloudId: String? = null)
 data class UserProfile(
     val id: Long,
@@ -190,7 +190,7 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
     }
 
     fun photoReports(): List<PhotoReport> = buildList {
-        readableDatabase.rawQuery("SELECT id,description,captured_time,location,cloud_id FROM photo_reports ORDER BY id DESC",null).use { c ->
+        readableDatabase.rawQuery("SELECT id,description,captured_time,location,cloud_id,owner_id FROM photo_reports ORDER BY id DESC",null).use { c ->
             while (c.moveToNext()) {
                 val id=c.getLong(0)
                 val photos=buildList {
@@ -198,10 +198,16 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
                         while (p.moveToNext()) add(p.getString(0))
                     }
                 }
-                add(PhotoReport(id,c.getString(1),c.getString(2),c.getString(3),photos,c.getString(4)))
+                add(PhotoReport(id,c.getString(1),c.getString(2),c.getString(3),photos,c.getString(4),c.getLong(5)))
             }
         }
     }
+
+    fun deletePhotoReport(id: Long,ownerId: Long): Boolean = writableDatabase.delete(
+        "photo_reports","id=? AND owner_id=?",arrayOf(id.toString(),ownerId.toString()))==1
+
+    fun deleteLegacyPhotoReports(cutoffMillis: Long): Int = writableDatabase.delete(
+        "photo_reports","created_at < ?",arrayOf(cutoffMillis.toString()))
 
     private fun hash(password: String, salt: ByteArray): ByteArray {
         val spec = PBEKeySpec(password.toCharArray(), salt, 120_000, 256)
