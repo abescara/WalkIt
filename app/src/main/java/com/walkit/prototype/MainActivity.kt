@@ -1,7 +1,9 @@
 package com.walkit.prototype
 
+import android.app.AlertDialog
 import android.app.Dialog
 import android.Manifest
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -125,6 +127,8 @@ class MainActivity : ComponentActivity() {
     private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
     private var mapTarget = LatLng(12.8797,121.7740)
     private var mapZoom = 5.5
+    private var startupLocationRequested = false
+    private var waitingForLocationSettings = false
     private var pickingPhotoLocation = false
     private var routePlannerVisible = false
     private var pickingRoutePoint: String? = null
@@ -667,14 +671,6 @@ class MainActivity : ComponentActivity() {
             web.setOnTouchListener { _, event -> forwardMapGesture(web,map,event) }
             screen.addView(web,FrameLayout.LayoutParams(-1,-1))
 
-            val locate=TextView(this).apply {
-                text="◎"; textSize=30f; gravity=Gravity.CENTER; contentDescription="Show my location"
-                setTextColor(Color.rgb(37,99,235)); background=rounded(Color.WHITE,32,0x22000000)
-                elevation=12f; setOnClickListener { showMyLocation() }
-            }
-            if(!routeMode) screen.addView(locate,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.END or Gravity.BOTTOM).apply {
-                rightMargin=dp(18); bottomMargin=dp(96)
-            })
         }
 
         map.onCreate(null)
@@ -699,6 +695,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         if(photoLocationPicking && lastUserLocation==null) showMyLocation()
+        if(!photoLocationPicking && !routeMode && !startupLocationRequested) {
+            startupLocationRequested=true
+            showMyLocation()
+        }
     }
 
     private fun addBottomNavigation() {
@@ -993,11 +993,19 @@ class MainActivity : ComponentActivity() {
         val manager=getSystemService(LOCATION_SERVICE) as LocationManager
         locationManager=manager
         val provider=when {
+            fine && manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
             manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
             else -> null
         }
-        if(provider==null) { toast("Turn on Location in your device settings, then try again."); return }
+        if(provider==null) {
+            AlertDialog.Builder(this).setMessage("Turn on device location to center the map on you.")
+                .setNegativeButton("Later",null)
+                .setPositiveButton("Open settings") { _,_ ->
+                    waitingForLocationSettings=true
+                    startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                }.show()
+            return
+        }
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.R) {
             try {
                 manager.getCurrentLocation(provider,null,mainExecutor) { location ->
@@ -1424,7 +1432,14 @@ class MainActivity : ComponentActivity() {
         mapView?.onPause(); mapView?.onStop(); mapView?.onDestroy(); mapView=null
     }
     override fun onStart() { super.onStart(); mapView?.onStart() }
-    override fun onResume() { super.onResume(); mapView?.onResume() }
+    override fun onResume() {
+        super.onResume()
+        mapView?.onResume()
+        if(waitingForLocationSettings) {
+            waitingForLocationSettings=false
+            showMyLocation()
+        }
+    }
     override fun onPause() { mapView?.onPause(); super.onPause() }
     override fun onStop() { mapView?.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView?.onLowMemory() }
