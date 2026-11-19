@@ -137,6 +137,9 @@ class MainActivity : ComponentActivity() {
                 require(pending.length()>0) { "Could not save that photo." }
                 if(target.exists()) target.delete()
                 require(pending.renameTo(target)) { "Could not save that photo." }
+                runCatching { cloud.uploadAvatar(target) }
+                    .onSuccess { path -> cloudProfile?.put("avatar_path",path) }
+                    .onFailure { runOnUiThread { toast("Photo saved on this phone. Shared profile photos need the database update or a connection.") } }
             }
             runOnUiThread {
                 result.fold({
@@ -162,7 +165,7 @@ class MainActivity : ComponentActivity() {
     private var mapParked = false
     private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
     private var mapTarget = LatLng(14.5995,120.9842)
-    private var mapZoom = 14.0
+    private var mapZoom = 16.0
     private var startupLocationRequested = false
     private var waitingForLocationSettings = false
     private var pickingPhotoLocation = false
@@ -183,7 +186,10 @@ class MainActivity : ComponentActivity() {
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>, val cloudPhotoPaths: List<String> = emptyList())
     private val displayedCloudReports = mutableSetOf<String>()
     private val remoteMarkers = mutableMapOf<String,org.maplibre.android.annotations.Marker>()
+    private val photoMarkers = mutableMapOf<Long,org.maplibre.android.annotations.Marker>()
+    private val hiddenPhotoDetails = mutableListOf<PhotoMarkerDetail>()
     private val queuedSharedPhotos = mutableSetOf<String>()
+    private val photoMarkerMinZoom = 14.0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -680,6 +686,11 @@ class MainActivity : ComponentActivity() {
     private fun syncCloudReports(owner: Long) {
         worker.execute {
             var failed=false
+            val avatar=cloud.userId()?.let { File(profilePhotoDir,"$it.jpg") }
+            if(avatar?.exists()==true && cloudProfile?.optString("avatar_path").isNullOrBlank()) {
+                runCatching { cloud.uploadAvatar(avatar) }
+                    .onSuccess { cloudProfile?.put("avatar_path",it) }
+            }
             db.pendingCloudReports(owner).forEach { report ->
                 runCatching {
                     val remoteId=cloud.postReport(report.description,report.category,report.latitude,report.longitude)
@@ -886,12 +897,15 @@ class MainActivity : ComponentActivity() {
                 maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
                 maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
                 lastUserLocation?.let { addUserLocationMarker(it) }
-                photoMarkerDetails.clear(); displayedCloudReports.clear(); remoteMarkers.clear()
+                photoMarkerDetails.clear(); hiddenPhotoDetails.clear(); photoMarkers.clear(); displayedCloudReports.clear(); remoteMarkers.clear()
                 maplibreMap.setOnMarkerClickListener { marker ->
                     photoMarkerDetails[marker.id]?.let { showPhotoDetails(it) }
                     true
                 }
-                maplibreMap.addOnCameraIdleListener { hydrateVisiblePhotoMarkers(maplibreMap) }
+                maplibreMap.addOnCameraIdleListener {
+                    refreshPhotoMarkerVisibility(maplibreMap)
+                    hydrateVisiblePhotoMarkers(maplibreMap)
+                }
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
                 loadSharedReports(maplibreMap)
             }
@@ -1428,6 +1442,18 @@ class MainActivity : ComponentActivity() {
         target.absolutePath.takeIf { target.exists() && target.length()>0 }
     }.getOrNull()
 
+    private fun cachedAvatar(storagePath: String): String? = runCatching {
+        val folder=File(cacheDir,"shared-avatars").apply { mkdirs() }
+        val name=java.util.UUID.nameUUIDFromBytes(storagePath.toByteArray()).toString()+".jpg"
+        val target=File(folder,name)
+        if(!target.exists() || target.length()==0L) {
+            val pending=File(folder,"$name.${Thread.currentThread().id}.pending")
+            pending.writeBytes(cloud.downloadAvatar(storagePath))
+            if(!target.exists()) pending.renameTo(target) else pending.delete()
+        }
+        target.absolutePath.takeIf { target.exists() && target.length()>0 }
+    }.getOrNull()
+
     private fun loadSharedReports(map: org.maplibre.android.maps.MapLibreMap) {
         sharedWorker.execute {
             val result=runCatching {
@@ -1462,7 +1488,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hydrateVisiblePhotoMarkers(map: org.maplibre.android.maps.MapLibreMap) {
-        if(currentMap!==map || !currentStyleReady || mapParked) return
+        if(currentMap!==map || !currentStyleReady || mapParked || map.cameraPosition.zoom<photoMarkerMinZoom) return
         val bounds=map.projection.visibleRegion.latLngBounds
         val center=map.cameraPosition.target ?: mapTarget
         remoteMarkers.toMap().entries.filter {
@@ -1484,6 +1510,7 @@ class MainActivity : ComponentActivity() {
                     val previous=remoteMarkers.remove(cloudId) ?: return@runOnUiThread
                     map.removeMarker(previous)
                     photoMarkerDetails.remove(previous.id)
+                    photoMarkers.remove(previous.id)
                     addPhotoMarkers(detail.report.copy(photos=listOf(cached)),detail.cloudPhotoPaths)
                 }
             }
@@ -1497,12 +1524,30 @@ class MainActivity : ComponentActivity() {
         if(coordinates.size!=2) return
         val point=LatLng(coordinates[0],coordinates[1])
         val photos=report.photos.filter { File(it).exists() }
+        if(map.cameraPosition.zoom<photoMarkerMinZoom) {
+            hiddenPhotoDetails.add(PhotoMarkerDetail(report,photos,cloudPhotoPaths))
+            return
+        }
         val markerSize=if(report.id<0) 42 else 48
         val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it,markerSize) } ?: makePhotoPlaceholder(markerSize)
         val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
         val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
         photoMarkerDetails[marker.id]=PhotoMarkerDetail(report,photos,cloudPhotoPaths)
+        photoMarkers[marker.id]=marker
         if(report.id<0 && report.cloudId!=null) remoteMarkers[report.cloudId]=marker
+    }
+
+    private fun refreshPhotoMarkerVisibility(map: org.maplibre.android.maps.MapLibreMap) {
+        if(currentMap!==map || !currentStyleReady) return
+        if(map.cameraPosition.zoom<photoMarkerMinZoom && photoMarkers.isNotEmpty()) {
+            hiddenPhotoDetails.addAll(photoMarkerDetails.values)
+            photoMarkers.values.toList().forEach(map::removeMarker)
+            photoMarkers.clear(); photoMarkerDetails.clear(); remoteMarkers.clear()
+        } else if(map.cameraPosition.zoom>=photoMarkerMinZoom && hiddenPhotoDetails.isNotEmpty()) {
+            val pending=hiddenPhotoDetails.toList()
+            hiddenPhotoDetails.clear()
+            pending.forEach { addPhotoMarkers(it.report,it.cloudPhotoPaths) }
+        }
     }
 
     private fun showPhotoDetails(detail: PhotoMarkerDetail) {
@@ -1564,6 +1609,50 @@ class MainActivity : ComponentActivity() {
             setPadding(0,dp(5),0,dp(2))
         })
 
+        val reactions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        val reactionScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(reactions) }
+        sheet.addView(reactionScroll,LinearLayout.LayoutParams(-1,dp(48)).apply { topMargin=dp(8) })
+        var reportReactionRows=org.json.JSONArray()
+        var commentReactionRows=org.json.JSONArray()
+        var reactionsAvailable=false
+        val reactionIcons=linkedMapOf("like" to "👍", "love" to "❤️", "care" to "🥰", "haha" to "😆", "wow" to "😮", "sad" to "😢", "angry" to "😠")
+        fun renderReportReactions() {
+            reactions.removeAllViews()
+            if(report.cloudId==null || !reactionsAvailable) {
+                reactions.addView(TextView(this).apply {
+                    text=if(report.cloudId==null) "Reactions will appear when this report is shared" else "Reactions need the database update"
+                    textSize=12f; setTextColor(Color.GRAY)
+                })
+                return
+            }
+            val rows=(0 until reportReactionRows.length()).mapNotNull(reportReactionRows::optJSONObject)
+            val mine=rows.firstOrNull { it.optString("owner_id")==cloud.userId() }?.optString("kind")
+            reactionIcons.forEach { (kind,icon) ->
+                val count=rows.count { it.optString("kind")==kind }
+                val button=TextView(this).apply {
+                    text="$icon${if(count>0) " $count" else ""}"
+                    textSize=18f; gravity=Gravity.CENTER; contentDescription="$kind reaction, $count"
+                    setPadding(dp(9),dp(5),dp(9),dp(5))
+                    background=rounded(if(mine==kind) Color.rgb(219,234,254) else Color.rgb(243,244,246),18)
+                    setOnClickListener {
+                        isEnabled=false
+                        sharedWorker.execute {
+                            val result=runCatching {
+                                cloud.setReportReaction(report.cloudId,if(mine==kind) null else kind)
+                                cloud.reportReactions(report.cloudId)
+                            }
+                            runOnUiThread {
+                                result.fold({ reportReactionRows=it; renderReportReactions() },
+                                    { toast(it.message ?: "Could not save reaction."); isEnabled=true })
+                            }
+                        }
+                    }
+                }
+                reactions.addView(button,LinearLayout.LayoutParams(-2,dp(38)).apply { rightMargin=dp(7) })
+            }
+        }
+        renderReportReactions()
+
         sheet.addView(TextView(this).apply {
             text="Discussion"; textSize=17f; setTextColor(Color.rgb(17,24,39)); setTypeface(null,android.graphics.Typeface.BOLD)
             setPadding(0,dp(12),0,dp(6))
@@ -1573,35 +1662,105 @@ class MainActivity : ComponentActivity() {
         sheet.addView(commentsScroll,LinearLayout.LayoutParams(-1,0,1f))
         val dialog=Dialog(this)
         photoDialog=dialog
+        var replyToId: String?=null
+        lateinit var commentInput: EditText
+        var reloadComments: () -> Unit = {}
 
         fun renderComments(items: List<PhotoComment>) {
-                if(photoDialog!==dialog) return
-                comments.removeAllViews()
-                if(items.isEmpty()) comments.addView(TextView(this).apply {
-                    text="No comments yet. Start the discussion."; textSize=14f; setTextColor(Color.rgb(107,114,128))
-                    setPadding(0,dp(8),0,dp(12))
-                })
-                items.forEach { item ->
-                    val entry=LinearLayout(this).apply {
-                        orientation=LinearLayout.VERTICAL; setPadding(dp(12),dp(10),dp(12),dp(10))
-                        background=rounded(Color.rgb(249,250,251),14,Color.rgb(229,231,235))
-                    }
-                    entry.addView(TextView(this).apply {
-                        val posted=SimpleDateFormat("MMM d · h:mm a",Locale.getDefault()).format(Date(item.createdAt))
-                        text="${if(item.anonymous) "Anonymous" else item.authorName}  ·  $posted"
-                        textSize=12f; setTextColor(Color.rgb(107,114,128))
-                    })
-                    if(item.text.isNotBlank()) entry.addView(TextView(this).apply {
-                        text=item.text; textSize=14f; setTextColor(Color.rgb(31,41,55)); setPadding(0,dp(4),0,0)
-                    })
-                    item.attachmentPath?.takeIf { File(it).exists() }?.let { path ->
-                        entry.addView(ImageView(this).apply {
-                            setImageBitmap(loadPhotoPreview(path,dp(320))); scaleType=ImageView.ScaleType.CENTER_CROP
-                            clipToOutline=true; background=rounded(Color.rgb(229,231,235),12)
-                        },LinearLayout.LayoutParams(-1,dp(120)).apply { topMargin=dp(8) })
-                    }
-                    comments.addView(entry,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(8) })
+            if(photoDialog!==dialog) return
+            comments.removeAllViews()
+            if(items.isEmpty()) comments.addView(TextView(this).apply {
+                text="No comments yet. Start the discussion."; textSize=14f; setTextColor(Color.rgb(107,114,128))
+                setPadding(0,dp(8),0,dp(12))
+            })
+            val byParent=items.groupBy { it.parentId }
+            val knownIds=items.mapNotNull { it.cloudId }.toSet()
+            val reactionItems=(0 until commentReactionRows.length()).mapNotNull(commentReactionRows::optJSONObject)
+            fun addEntry(item: PhotoComment,depth: Int) {
+                val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.TOP }
+                val avatarSize=if(depth==0) 34 else 28
+                val avatarFile=if(item.anonymous) null else (
+                    item.avatarPath?.takeIf { File(it).exists() }
+                        ?: if(item.id>0) cloud.userId()?.let { File(profilePhotoDir,"$it.jpg").takeIf(File::exists)?.absolutePath } else null
+                    )
+                val avatar=if(avatarFile!=null) ImageView(this).apply {
+                    setImageBitmap(loadPhotoPreview(avatarFile,dp(avatarSize*2)))
+                    scaleType=ImageView.ScaleType.CENTER_CROP; background=rounded(Color.rgb(229,231,235),avatarSize/2); clipToOutline=true
+                } else TextView(this).apply {
+                    text=if(item.anonymous) "?" else item.authorName.take(1).uppercase(Locale.getDefault())
+                    textSize=15f; gravity=Gravity.CENTER; setTextColor(Color.WHITE); setTypeface(null,android.graphics.Typeface.BOLD)
+                    background=rounded(Color.rgb(95,190,42),avatarSize/2)
                 }
+                row.addView(avatar,LinearLayout.LayoutParams(dp(avatarSize),dp(avatarSize)).apply { rightMargin=dp(8) })
+                val column=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+                val bubble=LinearLayout(this).apply {
+                    orientation=LinearLayout.VERTICAL; setPadding(dp(12),dp(9),dp(12),dp(9))
+                    background=rounded(Color.rgb(243,244,246),14)
+                }
+                bubble.addView(TextView(this).apply {
+                    text=if(item.anonymous) "Anonymous" else item.authorName
+                    textSize=13f; setTextColor(Color.rgb(17,24,39)); setTypeface(null,android.graphics.Typeface.BOLD)
+                })
+                if(item.text.isNotBlank()) bubble.addView(TextView(this).apply {
+                    text=item.text; textSize=14f; setTextColor(Color.rgb(31,41,55)); setPadding(0,dp(3),0,0)
+                })
+                item.attachmentPath?.takeIf { File(it).exists() }?.let { path ->
+                    bubble.addView(ImageView(this).apply {
+                        setImageBitmap(loadPhotoPreview(path,dp(240))); scaleType=ImageView.ScaleType.FIT_CENTER
+                        clipToOutline=true; background=rounded(Color.rgb(229,231,235),10)
+                    },LinearLayout.LayoutParams(-1,dp(105)).apply { topMargin=dp(7) })
+                }
+                column.addView(bubble)
+                val actions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(8),dp(3),0,dp(3)) }
+                val posted=SimpleDateFormat("MMM d · h:mm a",Locale.getDefault()).format(Date(item.createdAt))
+                actions.addView(TextView(this).apply { text=posted; textSize=11f; setTextColor(Color.GRAY) })
+                item.cloudId?.takeIf { reactionsAvailable }?.let { commentId ->
+                    val commentLikes=reactionItems.filter { it.optString("comment_id")==commentId }
+                    val mineKind=commentLikes.firstOrNull { it.optString("owner_id")==cloud.userId() }?.optString("kind")
+                    val likeButton=TextView(this).apply {
+                        text="${reactionIcons[mineKind] ?: "Like"} ${if(commentLikes.isNotEmpty()) commentLikes.size else ""}"
+                        textSize=12f; setTextColor(if(mineKind!=null) Color.rgb(37,99,235) else Color.DKGRAY)
+                        setPadding(dp(13),dp(5),dp(6),dp(5)); setOnClickListener {
+                            isEnabled=false
+                            sharedWorker.execute {
+                                val result=runCatching { cloud.setCommentReaction(commentId,if(mineKind=="like") null else "like") }
+                                runOnUiThread { result.fold({ reloadComments() },{ toast(it.message ?: "Could not react."); isEnabled=true }) }
+                            }
+                        }
+                    }
+                    likeButton.setOnLongClickListener {
+                        android.widget.PopupMenu(this,likeButton).apply {
+                            reactionIcons.forEach { (kind,icon) -> menu.add("$icon ${kind.replaceFirstChar(Char::uppercaseChar)}").setOnMenuItemClickListener {
+                                sharedWorker.execute {
+                                    val result=runCatching { cloud.setCommentReaction(commentId,kind) }
+                                    runOnUiThread { result.fold({ reloadComments() },{ toast(it.message ?: "Could not react.") }) }
+                                }
+                                true
+                            } }
+                            show()
+                        }
+                        true
+                    }
+                    actions.addView(likeButton)
+                    actions.addView(TextView(this).apply {
+                        text="Reply"; textSize=12f; setTextColor(Color.DKGRAY)
+                        setPadding(dp(9),dp(5),dp(6),dp(5)); setOnClickListener {
+                            replyToId=commentId
+                            commentInput.hint="Reply to ${if(item.anonymous) "Anonymous" else item.authorName}…"
+                            commentInput.requestFocus()
+                            (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                                .showSoftInput(commentInput,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                        }
+                    })
+                }
+                column.addView(actions)
+                row.addView(column,LinearLayout.LayoutParams(0,-2,1f))
+                comments.addView(row,LinearLayout.LayoutParams(-1,-2).apply {
+                    leftMargin=dp((depth*20).coerceAtMost(60)); bottomMargin=dp(7)
+                })
+                byParent[item.cloudId].orEmpty().forEach { addEntry(it,(depth+1).coerceAtMost(3)) }
+            }
+            items.filter { it.parentId==null || it.parentId !in knownIds }.forEach { addEntry(it,0) }
         }
         fun loadComments() {
             if(report.cloudId==null) {
@@ -1610,26 +1769,38 @@ class MainActivity : ComponentActivity() {
             }
             sharedWorker.execute {
                 val pending=if(report.id>0) db.pendingPhotoComments(report.id) else emptyList()
+                val reportReactionsResult=runCatching { cloud.reportReactions(report.cloudId) }
+                val commentReactionsResult=runCatching { cloud.commentReactions(report.cloudId) }
                 val remote=runCatching {
                     val rows=cloud.mapComments(report.cloudId)
+                    val avatarPaths=(0 until rows.length()).mapNotNull { index ->
+                        rows.getJSONObject(index).optString("avatar_path").takeIf(String::isNotBlank)
+                    }.distinct().associateWith(::cachedAvatar)
                     (0 until rows.length()).map { index ->
                         val item=rows.getJSONObject(index)
                         val posted=runCatching { java.time.OffsetDateTime.parse(item.getString("created_at")).toInstant().toEpochMilli() }
                             .getOrDefault(System.currentTimeMillis())
                         val path=item.optString("attachment_path").takeIf { it.isNotBlank() }?.let(::cachedSharedPhoto)
                         PhotoComment(-1,report.id,item.optString("body"),item.optBoolean("anonymous"),path,posted,
-                            item.optString("display_name").ifBlank { "WalkIt user" })
+                            item.optString("display_name").ifBlank { "WalkIt user" },item.optString("id"),
+                            item.optString("parent_id").takeIf { it.isNotBlank() && it!="null" },
+                            avatarPaths[item.optString("avatar_path")],item.optString("owner_id"))
                     }
                 }
                 runOnUiThread {
+                    reactionsAvailable=reportReactionsResult.isSuccess
+                    reportReactionRows=reportReactionsResult.getOrDefault(org.json.JSONArray())
+                    commentReactionRows=commentReactionsResult.getOrDefault(org.json.JSONArray())
+                    renderReportReactions()
                     if(remote.isFailure) toast("Could not refresh shared comments.")
                     renderComments((remote.getOrDefault(emptyList())+pending).sortedBy { it.createdAt })
                 }
             }
         }
+        reloadComments={ loadComments() }
         loadComments()
 
-        val commentInput=EditText(this).apply {
+        commentInput=EditText(this).apply {
             hint="Add to the discussion…"; textSize=14f; minLines=2; maxLines=3; gravity=Gravity.TOP
             setPadding(dp(12),dp(10),dp(12),dp(10)); background=rounded(Color.rgb(249,250,251),14,Color.rgb(229,231,235))
             inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
@@ -1665,9 +1836,11 @@ class MainActivity : ComponentActivity() {
             val body=commentInput.text.toString()
             val anonymousPost=anonymous.isChecked
             val attachment=selectedDiscussionPhoto
-            if(report.id>0) {
+            val parentId=replyToId
+            if(report.cloudId==null && report.id>0) {
                 runDb({ db.addPhotoComment(report.id,owner,body,anonymousPost,attachment) }) {
                     commentInput.setText("")
+                    replyToId=null; commentInput.hint="Add to the discussion…"
                     selectedDiscussionPhoto=null
                     preview.setImageDrawable(null)
                     post.isEnabled=true
@@ -1683,12 +1856,13 @@ class MainActivity : ComponentActivity() {
                             cloud.uploadPhoto(storagePath,File(path))
                             storagePath
                         }
-                        cloud.postMapComment(cloudId,body,anonymousPost,remotePhoto)
+                        cloud.postMapComment(cloudId,body,anonymousPost,remotePhoto,parentId)
                     }
                     runOnUiThread {
                         post.isEnabled=true
                         result.fold({
                             commentInput.setText("")
+                            replyToId=null; commentInput.hint="Add to the discussion…"
                             selectedDiscussionPhoto=null
                             preview.setImageDrawable(null)
                             loadComments()
@@ -1805,7 +1979,7 @@ class MainActivity : ComponentActivity() {
 
     private fun disposeMap() {
         currentStyleReady=false; currentMap=null
-        userLocationMarker=null; photoMarkerDetails.clear(); displayedCloudReports.clear(); remoteMarkers.clear(); queuedSharedPhotos.clear()
+        userLocationMarker=null; photoMarkerDetails.clear(); hiddenPhotoDetails.clear(); photoMarkers.clear(); displayedCloudReports.clear(); remoteMarkers.clear(); queuedSharedPhotos.clear()
         routeLine=null; routeMarkers.clear(); routePanelView=null
         routeOriginField=null; routeDestinationField=null
         if(!mapParked) { mapView?.onPause(); mapView?.onStop() }

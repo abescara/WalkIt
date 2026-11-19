@@ -82,7 +82,8 @@ class CloudAccount(context: Context) {
 
     fun profile(): JSONObject {
         val id=userId() ?: error("Please log in again.")
-        val rows=requestArray("GET","/rest/v1/profiles?id=eq.$id&select=id,username,display_name,bio",null,true)
+        val rows=runCatching { requestArray("GET","/rest/v1/profiles?id=eq.$id&select=id,username,display_name,bio,avatar_path",null,true) }
+            .getOrElse { requestArray("GET","/rest/v1/profiles?id=eq.$id&select=id,username,display_name,bio",null,true) }
         return rows.optJSONObject(0) ?: error("Your profile is unavailable. Ask the team to apply the profile trigger.")
     }
 
@@ -170,8 +171,27 @@ class CloudAccount(context: Context) {
     fun reportPhotos(): JSONArray = requestArray("GET",
         "/rest/v1/report_photos?select=report_id,storage_path,position&order=position.asc&limit=1000",null,true)
 
-    fun mapComments(reportId: String): JSONArray = requestArray("GET",
-        "/rest/v1/map_comments?report_id=eq.$reportId&select=id,owner_id,body,anonymous,attachment_path,created_at,display_name,username&order=created_at.asc&limit=200",null,true)
+    fun mapComments(reportId: String): JSONArray = runCatching { requestArray("GET",
+        "/rest/v1/map_comments?report_id=eq.$reportId&select=id,owner_id,parent_id,body,anonymous,attachment_path,created_at,display_name,username,avatar_path&order=created_at.asc&limit=200",null,true) }
+        .getOrElse { requestArray("GET",
+            "/rest/v1/map_comments?report_id=eq.$reportId&select=id,owner_id,body,anonymous,attachment_path,created_at,display_name,username&order=created_at.asc&limit=200",null,true) }
+
+    fun reportReactions(reportId: String): JSONArray = requestArray("GET",
+        "/rest/v1/report_reactions?report_id=eq.$reportId&select=owner_id,kind",null,true)
+
+    fun commentReactions(reportId: String): JSONArray = requestArray("GET",
+        "/rest/v1/map_comment_reactions?report_id=eq.$reportId&select=comment_id,owner_id,kind",null,true)
+
+    fun setReportReaction(reportId: String,kind: String?) = setReaction("report_reactions","report_id",reportId,kind)
+    fun setCommentReaction(commentId: String,kind: String?) = setReaction("comment_reactions","comment_id",commentId,kind)
+    private fun setReaction(table: String,idField: String,targetId: String,kind: String?) {
+        val id=userId() ?: error("Log in to react.")
+        require(kind==null || kind in setOf("like","love","care","haha","wow","sad","angry")) { "Invalid reaction." }
+        if(kind==null) rawRequest("DELETE","/rest/v1/$table?$idField=eq.$targetId&owner_id=eq.$id",null,true,false)
+        else rawRequest("POST","/rest/v1/$table?on_conflict=$idField,owner_id",
+            JSONObject().put(idField,targetId).put("owner_id",id).put("kind",kind),true,false,
+            "resolution=merge-duplicates")
+    }
 
     fun addReportPhoto(reportId: String,position: Int,storagePath: String) {
         val id=userId() ?: error("Log in to share a report photo.")
@@ -181,23 +201,32 @@ class CloudAccount(context: Context) {
             "resolution=ignore-duplicates")
     }
 
-    fun postMapComment(reportId: String,body: String,anonymous: Boolean,attachmentPath: String?): String {
+    fun postMapComment(reportId: String,body: String,anonymous: Boolean,attachmentPath: String?,parentId: String?=null): String {
         val id=userId() ?: error("Log in to comment.")
-        val response=requestArray("POST","/rest/v1/comments",
-            JSONObject().put("report_id",reportId).put("owner_id",id)
+        val payload=JSONObject().put("report_id",reportId).put("owner_id",id)
                 .put("body",body.trim()).put("anonymous",anonymous)
-                .put("attachment_path",attachmentPath ?: JSONObject.NULL),true,true)
+                .put("attachment_path",attachmentPath ?: JSONObject.NULL)
+        if(parentId!=null) payload.put("parent_id",parentId)
+        val response=requestArray("POST","/rest/v1/comments",payload,true,true)
         return response.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
             ?: error("The server did not return a comment ID.")
     }
 
-    fun uploadPhoto(storagePath: String,file: File) {
+    fun uploadPhoto(storagePath: String,file: File) = uploadImage("report-photos",storagePath,file,1600)
+    fun uploadAvatar(file: File): String {
+        val id=userId() ?: error("Log in to change your photo.")
+        val path="$id/avatar-${System.currentTimeMillis()}.jpg"
+        uploadImage("profile-photos",path,file,512)
+        request("PATCH","/rest/v1/profiles?id=eq.$id",JSONObject().put("avatar_path",path),true)
+        return path
+    }
+    private fun uploadImage(bucket: String,storagePath: String,file: File,maxSize: Int) {
         require(file.exists()) { "A photo on this device is missing." }
         val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
         BitmapFactory.decodeFile(file.absolutePath,bounds)
         require(bounds.outWidth>0 && bounds.outHeight>0) { "Could not read a photo." }
         var sample=1
-        while(bounds.outWidth/sample>1600 || bounds.outHeight/sample>1600) sample*=2
+        while(bounds.outWidth/sample>maxSize || bounds.outHeight/sample>maxSize) sample*=2
         val bitmap=BitmapFactory.decodeFile(file.absolutePath,BitmapFactory.Options().apply { inSampleSize=sample })
             ?: error("Could not read a photo.")
         val bytes=ByteArrayOutputStream().use { output ->
@@ -205,7 +234,7 @@ class CloudAccount(context: Context) {
             bitmap.recycle()
             output.toByteArray()
         }
-        val request=Request.Builder().url("$base/storage/v1/object/report-photos/${encodePath(storagePath)}")
+        val request=Request.Builder().url("$base/storage/v1/object/$bucket/${encodePath(storagePath)}")
             .header("apikey",key).header("Authorization","Bearer ${token()}")
             .post(bytes.toRequestBody("image/jpeg".toMediaType())).build()
         http.newCall(request).execute().use { response ->
@@ -220,6 +249,14 @@ class CloudAccount(context: Context) {
         return http.newCall(request).execute().use { response ->
             if(!response.isSuccessful) error("Could not load a shared photo (${response.code}).")
             response.body?.bytes() ?: error("The shared photo is empty.")
+        }
+    }
+    fun downloadAvatar(storagePath: String): ByteArray {
+        val request=Request.Builder().url("$base/storage/v1/object/profile-photos/${encodePath(storagePath)}")
+            .header("apikey",key).header("Authorization","Bearer ${token()}").get().build()
+        return http.newCall(request).execute().use { response ->
+            if(!response.isSuccessful) error("Could not load a profile photo (${response.code}).")
+            response.body?.bytes() ?: error("The profile photo is empty.")
         }
     }
 

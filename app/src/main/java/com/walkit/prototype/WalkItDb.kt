@@ -14,7 +14,7 @@ data class Hazard(val id: Long, val ownerId: Long, val owner: String, val segmen
                   val severity: Int, val details: String, val status: String)
 data class Route(val name: String, val meters: Int, val hazards: Int, val barriers: Int)
 data class PhotoReport(val id: Long, val description: String, val time: String, val location: String, val photos: List<String>, val cloudId: String? = null)
-data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long, val authorName: String = "WalkIt user")
+data class PhotoComment(val id: Long, val reportId: Long, val text: String, val anonymous: Boolean, val attachmentPath: String?, val createdAt: Long, val authorName: String = "WalkIt user", val cloudId: String? = null, val parentId: String? = null, val avatarPath: String? = null, val ownerCloudId: String? = null)
 data class UserProfile(
     val id: Long,
     val username: String,
