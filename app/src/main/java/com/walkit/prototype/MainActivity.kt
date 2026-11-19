@@ -1176,8 +1176,15 @@ class MainActivity : ComponentActivity() {
                 }
                 val to=if(endQuery=="Pinned destination on map") routeEndPoint else resolvePlace(endQuery)
                 if(from==null || to==null) error("Start or destination could not be found in the Philippines")
+                val separation=FloatArray(1)
+                Location.distanceBetween(from.latitude,from.longitude,to.latitude,to.longitude,separation)
+                require(separation[0]>20f) { "Choose two different places for the route." }
                 val points=runCatching { fetchWalkingRoute(from,to,avoidObstacle,"hiking-mountain") }
-                    .getOrElse { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
+                    .recoverCatching { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
+                    .getOrElse { failure ->
+                        if(avoidObstacle!=null) throw failure
+                        fetchValhallaWalkingRoute(from,to)
+                    }
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     displayRoute(points,from,to)
@@ -1238,7 +1245,10 @@ class MainActivity : ComponentActivity() {
             connectTimeout=15_000; readTimeout=30_000; requestMethod="GET"
         }
         val response=try {
-            if(connection.responseCode !in 200..299) error("Route service returned ${connection.responseCode}")
+            if(connection.responseCode !in 200..299) {
+                val detail=connection.errorStream?.bufferedReader()?.use { it.readText() }?.take(180).orEmpty()
+                error("Route service returned ${connection.responseCode}: $detail")
+            }
             connection.inputStream.bufferedReader().use { it.readText() }
         } finally { connection.disconnect() }
         val coordinates=JSONObject(response).getJSONArray("features").getJSONObject(0)
@@ -1248,6 +1258,31 @@ class MainActivity : ComponentActivity() {
             LatLng(coordinate.getDouble(1),coordinate.getDouble(0))
         }
         require(points.size>=2) { "No walkable route was found between these points." }
+        return points
+    }
+
+    private fun fetchValhallaWalkingRoute(from: LatLng,to: LatLng): List<LatLng> {
+        val payload=JSONObject().put("locations",org.json.JSONArray()
+            .put(JSONObject().put("lat",from.latitude).put("lon",from.longitude))
+            .put(JSONObject().put("lat",to.latitude).put("lon",to.longitude)))
+            .put("costing","pedestrian").put("format","osrm").put("shape_format","geojson")
+        val url="https://valhalla1.openstreetmap.de/route?json=${URLEncoder.encode(payload.toString(),"UTF-8")}"
+        val connection=(URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout=15_000; readTimeout=30_000
+            setRequestProperty("X-Client-Id","WalkIt-student-prototype")
+            setRequestProperty("User-Agent","WalkItPrototype/1.0 (student accessibility map)")
+        }
+        val response=try {
+            if(connection.responseCode !in 200..299) error("Walking route unavailable (${connection.responseCode}). Try moving the pins closer to a road.")
+            connection.inputStream.bufferedReader().use { it.readText() }
+        } finally { connection.disconnect() }
+        val coordinates=JSONObject(response).getJSONArray("routes").getJSONObject(0)
+            .getJSONObject("geometry").getJSONArray("coordinates")
+        val points=(0 until coordinates.length()).map { index ->
+            val coordinate=coordinates.getJSONArray(index)
+            LatLng(coordinate.getDouble(1),coordinate.getDouble(0))
+        }
+        require(points.size>=2) { "No walking route was found between these places." }
         return points
     }
 
