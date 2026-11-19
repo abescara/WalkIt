@@ -158,9 +158,9 @@ class CloudAccount(context: Context) {
     fun voteForumPost(postId: Long,value: Int) {
         require(postId>0 && value in -1..1) { "Invalid vote." }
         val id=userId() ?: error("Log in to vote.")
-        if(value==0) rawRequest("DELETE","/rest/v1/forum_votes?post_id=eq.$postId&voter_id=eq.$id",null,true,false)
-        else rawRequest("POST","/rest/v1/forum_votes?on_conflict=post_id,voter_id",
-            JSONObject().put("post_id",postId).put("voter_id",id).put("value",value),true,false,"resolution=merge-duplicates")
+        rawRequest("DELETE","/rest/v1/forum_votes?post_id=eq.$postId&voter_id=eq.$id",null,true,false)
+        if(value!=0) rawRequest("POST","/rest/v1/forum_votes",
+            JSONObject().put("post_id",postId).put("voter_id",id).put("value",value),true,false)
     }
 
     fun deleteForumPost(postId: Long) {
@@ -218,10 +218,9 @@ class CloudAccount(context: Context) {
     private fun setReaction(table: String,idField: String,targetId: String,kind: String?) {
         val id=userId() ?: error("Log in to react.")
         require(kind==null || kind in setOf("like","love","care","haha","wow","sad","angry")) { "Invalid reaction." }
-        if(kind==null) rawRequest("DELETE","/rest/v1/$table?$idField=eq.$targetId&owner_id=eq.$id",null,true,false)
-        else rawRequest("POST","/rest/v1/$table?on_conflict=$idField,owner_id",
-            JSONObject().put(idField,targetId).put("owner_id",id).put("kind",kind),true,false,
-            "resolution=merge-duplicates")
+        rawRequest("DELETE","/rest/v1/$table?$idField=eq.$targetId&owner_id=eq.$id",null,true,false)
+        if(kind!=null) rawRequest("POST","/rest/v1/$table",
+            JSONObject().put(idField,targetId).put("owner_id",id).put("kind",kind),true,false)
     }
 
     fun addReportPhoto(reportId: String,position: Int,storagePath: String) {
