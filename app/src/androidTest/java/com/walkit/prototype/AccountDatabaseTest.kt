@@ -177,7 +177,18 @@ class AccountDatabaseTest {
         assertNull(db.login("guest", password))
         assertEquals("Guest report", db.photoReports().single().description)
         assertEquals(listOf("legacy-photo.jpg"), db.photoReports().single().photos)
-        assertEquals(4, db.readableDatabase.version)
+        assertEquals(5, db.readableDatabase.version)
+    }
+
+    @Test
+    fun cloudUserMapsToOneLocalAccountAndPendingReportsSyncOnce() {
+        val cloudId="d336c2c5-0fca-4c53-9ef3-33545d8be101"
+        val localId=db.ensureCloudUser(cloudId,"Sam")
+        assertEquals(localId,db.ensureCloudUser(cloudId,"Sam"))
+        val reportId=db.savePhotoReport(localId,"Blocked path · Debris","10:00","14.60,120.98",listOf("photo.jpg"))
+        assertEquals(listOf(reportId),db.pendingCloudReports(localId).map { it.id })
+        db.markCloudReportSynced(reportId,"7e980519-bc18-4f10-a1d6-4ecc986ea04e")
+        assertTrue(db.pendingCloudReports(localId).isEmpty())
     }
 
     private fun storedCredentials(id: Long): Pair<ByteArray, ByteArray> {

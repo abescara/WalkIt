@@ -25,11 +25,11 @@ data class UserProfile(
 )
 data class LeaderboardEntry(val userId: Long, val displayName: String, val username: String, val reports: Int, val comments: Int, val points: Int)
 
-class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpenHelper(context, databaseName, null, 4) {
+class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpenHelper(context, databaseName, null, 5) {
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, bio TEXT NOT NULL DEFAULT '', salt BLOB NOT NULL, password_hash BLOB NOT NULL)")
+        db.execSQL("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, bio TEXT NOT NULL DEFAULT '', salt BLOB NOT NULL, password_hash BLOB NOT NULL, cloud_id TEXT UNIQUE)")
         db.execSQL("CREATE TABLE pathway_segments (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
         db.execSQL("CREATE TABLE walking_routes (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, distance_m INTEGER NOT NULL CHECK(distance_m > 0))")
         db.execSQL("CREATE TABLE route_segments (route_id INTEGER NOT NULL REFERENCES walking_routes(id), segment_id INTEGER NOT NULL REFERENCES pathway_segments(id), sequence_no INTEGER NOT NULL, PRIMARY KEY(route_id, segment_id), UNIQUE(route_id, sequence_no))")
@@ -56,10 +56,22 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
             // Keep existing accounts and reports when adding profile information.
             db.execSQL("ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''")
         }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE users ADD COLUMN cloud_id TEXT")
+            db.execSQL("CREATE UNIQUE INDEX users_cloud_id ON users(cloud_id)")
+            if(!hasColumn(db,"photo_reports","cloud_id")) db.execSQL("ALTER TABLE photo_reports ADD COLUMN cloud_id TEXT")
+        }
+    }
+
+    private fun hasColumn(db: SQLiteDatabase,table: String,column: String): Boolean {
+        db.rawQuery("PRAGMA table_info($table)",null).use { cursor ->
+            while(cursor.moveToNext()) if(cursor.getString(1)==column) return true
+        }
+        return false
     }
 
     private fun createPhotoTables(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS photo_reports (id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, description TEXT NOT NULL, captured_time TEXT NOT NULL, location TEXT NOT NULL, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS photo_reports (id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, description TEXT NOT NULL, captured_time TEXT NOT NULL, location TEXT NOT NULL, created_at INTEGER NOT NULL, cloud_id TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS photo_items (id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE, local_path TEXT NOT NULL)")
     }
 
@@ -98,6 +110,38 @@ class WalkItDb(context: Context, databaseName: String = "walkit.db") : SQLiteOpe
             db.setTransactionSuccessful()
             return id
         } finally { db.endTransaction() }
+    }
+
+    fun ensureCloudUser(cloudId: String, displayName: String): Long {
+        readableDatabase.rawQuery("SELECT id FROM users WHERE cloud_id=?",arrayOf(cloudId)).use { cursor ->
+            if(cursor.moveToFirst()) return cursor.getLong(0)
+        }
+        val salt=ByteArray(16).also { SecureRandom().nextBytes(it) }
+        return writableDatabase.insertOrThrow("users",null,ContentValues().apply {
+            put("username","cloud_"+cloudId.replace("-","").take(18))
+            put("display_name",displayName)
+            put("cloud_id",cloudId)
+            put("salt",salt)
+            put("password_hash",hash(java.util.UUID.randomUUID().toString(),salt))
+        })
+    }
+
+    data class PendingCloudReport(val id: Long,val description: String,val category: String,val latitude: Double,val longitude: Double)
+
+    fun pendingCloudReports(ownerId: Long): List<PendingCloudReport> = buildList {
+        readableDatabase.rawQuery("SELECT id,description,location FROM photo_reports WHERE owner_id=? AND cloud_id IS NULL ORDER BY id",arrayOf(ownerId.toString())).use { cursor ->
+            while(cursor.moveToNext()) {
+                val coordinates=cursor.getString(2).split(",").mapNotNull { it.trim().toDoubleOrNull() }
+                if(coordinates.size==2) {
+                    val description=cursor.getString(1)
+                    add(PendingCloudReport(cursor.getLong(0),description,description.substringBefore("·").trim(),coordinates[0],coordinates[1]))
+                }
+            }
+        }
+    }
+
+    fun markCloudReportSynced(localId: Long,cloudId: String) {
+        writableDatabase.update("photo_reports",ContentValues().apply { put("cloud_id",cloudId) },"id=?",arrayOf(localId.toString()))
     }
 
     fun photoReports(): List<PhotoReport> = buildList {

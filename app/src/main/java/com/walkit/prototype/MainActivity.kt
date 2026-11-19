@@ -52,11 +52,14 @@ import java.net.URLEncoder
 import android.location.Geocoder
 import org.json.JSONObject
 import com.walkit.prototype.data.UserSession
+import com.walkit.prototype.data.CloudAccount
 
 class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var db: WalkItDb
     private lateinit var session: UserSession
+    private lateinit var cloud: CloudAccount
+    private var cloudProfile: JSONObject? = null
     private lateinit var screen: FrameLayout
     private var userId: Long? = null
     private var mapView: MapView? = null
@@ -140,6 +143,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         db = WalkItDb(this)
         session=UserSession(this)
+        cloud=CloudAccount(this)
         darkThemeEnabled=getSharedPreferences("walkit-ui",MODE_PRIVATE).getBoolean("dark_theme",false)
         MapLibre.getInstance(this)
         window.statusBarColor = Color.rgb(248, 250, 252)
@@ -147,9 +151,14 @@ class MainActivity : ComponentActivity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         screen = FrameLayout(this)
         setContentView(screen)
-        runDb({ session.userId()?.let { db.profile(it) } }) { profile ->
+        runDb({ cloud.restore()?.let { cloud.profile() } }) { profile ->
             if(profile==null) showAuthScreen("Login")
-            else { userId=profile.id; showTab(Tab.MAP) }
+            else {
+                cloudProfile=profile
+                runDb({ db.ensureCloudUser(profile.getString("id"),profile.getString("display_name")) }) { id ->
+                    userId=id; showTab(Tab.MAP); syncCloudReports(id)
+                }
+            }
         }
     }
 
@@ -313,48 +322,71 @@ class MainActivity : ComponentActivity() {
     }
 
     inner class FrontendBridge {
-        @JavascriptInterface fun login(username: String,password: String) {
+        @JavascriptInterface fun login(email: String,password: String) {
             worker.execute {
-                val result=runCatching { db.login(username,password) }
+                val result=runCatching {
+                    cloud.signIn(email,password)
+                    val profile=cloud.profile()
+                    db.ensureCloudUser(profile.getString("id"),profile.getString("display_name")) to profile
+                }
                 runOnUiThread {
-                    val id=result.getOrNull()
-                    if(id==null) accountError("Incorrect username or password.")
-                    else { session.signIn(id); userId=id; showTab(Tab.MAP) }
+                    result.fold({ (id,profile) -> cloudProfile=profile; userId=id; showTab(Tab.MAP); syncCloudReports(id) },
+                        { error -> accountError(error.message ?: "Could not sign in.") })
                 }
             }
         }
-        @JavascriptInterface fun register(username: String,password: String,displayName: String) {
+        @JavascriptInterface fun register(email: String,username: String,password: String,displayName: String) {
             worker.execute {
-                val result=runCatching { db.register(username,password,displayName) }
+                val result=runCatching {
+                    if(cloud.signUp(email,password,username.trim().lowercase(Locale.ROOT),displayName)) {
+                        val profile=cloud.profile()
+                        db.ensureCloudUser(profile.getString("id"),profile.getString("display_name")) to profile
+                    } else null
+                }
                 runOnUiThread {
-                    result.fold({ id -> session.signIn(id); userId=id; showTab(Tab.MAP) },
+                    result.fold({ account ->
+                        if(account==null) accountError("Check your email to confirm the account, then log in.")
+                        else { cloudProfile=account.second; userId=account.first; showTab(Tab.MAP) }
+                    },
                         { error -> accountError(error.message ?: "Could not create account.") })
                 }
             }
         }
         @JavascriptInterface fun logout() = runOnUiThread {
-            session.signOut(); userId=null; capturedPhotos.clear(); showAuthScreen("Login")
+            userId=null; cloudProfile=null; capturedPhotos.clear(); showAuthScreen("Login")
+            worker.execute { cloud.signOut() }
         }
         @JavascriptInterface fun getProfile(): String {
-            val profile=userId?.let { db.profile(it) } ?: return "{}"
-            return JSONObject().put("username",profile.username).put("displayName",profile.displayName)
-                .put("bio",profile.bio).put("reports",profile.reportCount).put("comments",profile.commentCount).toString()
+            val profile=cloudProfile ?: return "{}"
+            val entry=runCatching { cloud.leaderboard() }.getOrNull()?.let { rows ->
+                (0 until rows.length()).mapNotNull(rows::optJSONObject).firstOrNull { it.optString("id")==profile.optString("id") }
+            }
+            return JSONObject().put("username",profile.optString("username"))
+                .put("displayName",profile.optString("display_name")).put("bio",profile.optString("bio"))
+                .put("reports",entry?.optInt("reports") ?: 0).put("comments",entry?.optInt("comments") ?: 0).toString()
         }
         @JavascriptInterface fun saveProfile(displayName: String,bio: String) {
             val id=userId ?: return
             worker.execute {
-                val result=runCatching { db.updateProfile(id,displayName,bio) }
+                val result=runCatching {
+                    cloud.updateProfile(displayName,bio)
+                    db.updateProfile(id,displayName,bio)
+                    cloudProfile=cloud.profile()
+                }
                 runOnUiThread { result.fold({ accountError("Profile saved.") },{ accountError(it.message ?: "Could not save profile.") }) }
             }
         }
         @JavascriptInterface fun getLeaderboard(): String = org.json.JSONArray().apply {
-            db.leaderboard().forEachIndexed { index,entry ->
-                put(JSONObject().put("rank",index+1).put("userId",entry.userId)
-                    .put("displayName",entry.displayName).put("username",entry.username)
-                    .put("reports",entry.reports).put("comments",entry.comments).put("points",entry.points))
+            val rows=runCatching { cloud.leaderboard() }.getOrNull() ?: org.json.JSONArray()
+            for(index in 0 until rows.length()) {
+                val entry=rows.getJSONObject(index)
+                put(JSONObject().put("rank",index+1).put("userId",entry.optString("id"))
+                    .put("displayName",entry.optString("display_name")).put("username",entry.optString("username"))
+                    .put("reports",entry.optInt("reports")).put("comments",entry.optInt("comments"))
+                    .put("points",entry.optInt("points")))
             }
         }.toString()
-        @JavascriptInterface fun getCurrentUserId(): Long = userId ?: -1L
+        @JavascriptInterface fun getCurrentUserId(): String = cloud.userId() ?: ""
         @JavascriptInterface fun navigate(destination: String) = runOnUiThread {
             when(destination.lowercase()) {
                 "map", "main" -> {
@@ -458,12 +490,25 @@ class MainActivity : ComponentActivity() {
                 lastSubmittedLocation=location
                 capturedPhotos.clear()
                 showWebScreen("Report_Preview")
+                syncCloudReports(owner)
             }
         }
     }
 
     private fun accountError(message: String) {
         currentWebView?.evaluateJavascript("window.walkItAccountMessage && window.walkItAccountMessage(${JSONObject.quote(message)})",null)
+    }
+
+    private fun syncCloudReports(owner: Long) {
+        worker.execute {
+            val result=runCatching {
+                db.pendingCloudReports(owner).forEach { report ->
+                    val remoteId=cloud.postReport(report.description,report.category,report.latitude,report.longitude)
+                    db.markCloudReportSynced(report.id,remoteId)
+                }
+            }
+            if(result.isFailure) runOnUiThread { toast("Report saved on this device. Cloud sync will retry after your next login.") }
+        }
     }
 
     private fun showCoordinateSearch() {
@@ -1107,6 +1152,7 @@ class MainActivity : ComponentActivity() {
                 val report=PhotoReport(id,description.text.toString(),time.text.toString(),"$lat, $lon",paths)
                 mapTarget=LatLng(lat,lon); mapZoom=maxOf(mapZoom,16.0)
                 dialog.dismiss(); capturedPhotos.clear(); showTab(Tab.MAP); toast("Report added to the map.")
+                syncCloudReports(owner)
             }
         }
         dialog.setOnDismissListener { if(photoDialog===dialog) photoDialog=null }

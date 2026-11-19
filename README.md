@@ -1,10 +1,10 @@
 # WalkIt
 
-WalkIt is a Kotlin Android prototype for recording pedestrian hazards and comparing predefined walking routes in the Philippines. Reports and accounts are local; viewing the street map requires an internet connection.
+WalkIt is a Kotlin Android prototype for recording pedestrian hazards and comparing predefined walking routes in the Philippines. Accounts and report rankings use Supabase; viewing the street map also requires an internet connection.
 
 ## Status
 
-**Buildable MVP draft.** The prototype now has local account registration and login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Report markers open their photos and a local discussion. A route planner connects two points through BRouter. Accounts, reports, photos, comments, and rankings remain on the device; cross-device sync is not configured.
+**Buildable MVP draft.** The prototype now has local account registration and login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Report markers open their photos and a local discussion. A route planner connects two points through BRouter. Accounts and report rankings are shared through Supabase. Photo files and discussions remain on the device.
 
 ## Planned prototype
 
@@ -12,8 +12,8 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 - On-device SQLite database through `SQLiteOpenHelper`
 - Account-owned hazard reports with local persistence and owner-restricted changes
 - Predefined pathway segments and routes, route comparison, saved routes, and preferences
-- A local leaderboard with 10 points per report and 2 points per comment; badges remain planned
-- Local account and report storage on one installation; accounts and reports do not sync between devices
+- A shared leaderboard based on uploaded reports; badges remain planned
+- Supabase email/password accounts with local report storage and shared report metadata
 - Interactive MapLibre street map with road labels, OpenStreetMap data attribution, current-location control, photo-location picker, and tappable report markers
 - Expandable point-to-point route planner; route calculation needs an internet connection and uses the public BRouter service
 - Report discussion UI with comments, optional anonymous posting, and optional local photo attachments
@@ -46,4 +46,5 @@ Sam Denielle Arias; Helijah Sephreen Coo; Angel John Escara; Daniel Kenneth Eugi
 ## License
 
 No license has been selected. Contact the project team before reusing the material.
+
 

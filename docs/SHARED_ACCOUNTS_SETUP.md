@@ -1,11 +1,12 @@
 # Shared accounts setup
 
-The current APK supports multiple accounts on one device. To share accounts, reports, and rankings between phones, create a Supabase project and connect the Android client to it. Local SQLite accounts cannot be copied into Supabase as passwords because their password hashes use a separate scheme; users should register again on the shared service.
+The Android app connects to the WalkIt Supabase project at `https://juxnlpazlvjggxmojnoq.supabase.co`. It uses the public project key and Supabase Auth for email/password sign in. The key is safe to include in a client app because access to tables is controlled by row policies. Never put the service role key or database password in the app.
 
-1. Create a project in the [Supabase dashboard](https://supabase.com/dashboard).
-2. In **Authentication → Providers → Email**, enable email and password. Decide whether to require email confirmation during team testing.
-3. Run [`supabase/schema.sql`](../supabase/schema.sql) in the project's SQL editor.
-4. In **Project Settings → API**, copy the Project URL and publishable key. Provide these to the Android developer. Never put the service role key or database password in the app.
-5. After the Android client is connected, create two accounts on separate devices, add reports, and confirm the leaderboard shows both users.
+Existing device-only accounts cannot be copied into Supabase as passwords because their password hashes use a separate scheme. Users should register again on the shared service.
 
-The schema uses authenticated row policies. The leaderboard grants 10 points for a report and 2 for a comment. The team can revise this scoring rule before launch. Photo storage and synchronization remain separate work.
+1. In **Authentication → Providers → Email**, enable email and password. If email confirmation remains on, users must confirm their email before logging in.
+2. Run [`supabase/schema.sql`](../supabase/schema.sql) in the SQL Editor once. This project already completed that step.
+3. Run [`supabase/02_profile_trigger.sql`](../supabase/02_profile_trigger.sql) in the SQL Editor once. The trigger creates a profile when a user signs up, even when email confirmation is enabled.
+4. Install the feature branch APK on two devices, register different email addresses, add reports, and confirm both accounts appear on the leaderboard.
+
+The schema uses authenticated row policies. Reports are saved locally and their text, category, and location are uploaded to Supabase; failed uploads retry after the next login. The leaderboard grants 10 points for a synced report and 2 for a synced comment. Comment and photo file synchronization remain separate work, so comment points and report photos are currently limited to the original device.
