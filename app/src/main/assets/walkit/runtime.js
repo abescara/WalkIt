@@ -18,6 +18,7 @@
     canvas.style.transformOrigin = "top left";
     canvas.style.width = "390px";
     canvas.style.height = `${logicalHeight}px`;
+    updateRouteSearchBounds();
   }
   window.walkItResize = sizeToDevice;
   if (window.visualViewport) window.visualViewport.addEventListener("resize", sizeToDevice);
@@ -309,6 +310,16 @@
     rail.id="route-report-rail";
     rail.style.cssText=`position:absolute;right:12px;top:120px;width:220px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:13;box-sizing:border-box`;
     canvas?.appendChild(rail);
+    updateRouteSearchBounds();
+  }
+  function updateRouteSearchBounds() {
+    if(screenName!=="Routes" || !bridge) return;
+    const search=document.getElementById("route-search-panel");
+    const canvas=document.querySelector(".wrap > div");
+    if(!search || !canvas) return;
+    const scale=canvas.getBoundingClientRect().width/390 || 1;
+    const bottom=(search.getBoundingClientRect().bottom-canvas.getBoundingClientRect().top)/scale;
+    bridge.setRouteSearchBounds(search.style.display!=="none",bottom);
   }
   function setRoutePreference(button,enabled) {
     button.setAttribute("aria-pressed",String(enabled));
@@ -321,6 +332,7 @@
   }
   window.walkItRouteLoading=function() {
     document.getElementById("route-search-panel")?.style.setProperty("display","none");
+    updateRouteSearchBounds();
     document.getElementById("route-panel-toggles")?.style.setProperty("display","flex");
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
@@ -332,6 +344,7 @@
     if(!search) return;
     const show=search.style.display==="none";
     search.style.display=show?"":"none";
+    updateRouteSearchBounds();
     const reports=document.getElementById("route-reports-toggle");
     if(reports) { reports.style.display=show?"none":document.getElementById("route-report-rail")?.dataset.hasRoute==="true"?"block":"none"; reports.setAttribute("aria-expanded","false"); }
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
@@ -815,6 +828,7 @@
   window.walkItRouteReady = function() {};
   window.walkItRouteError = function(message) {
     document.getElementById("route-search-panel")?.style.setProperty("display","");
+    updateRouteSearchBounds();
     document.getElementById("route-panel-toggles")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
     document.getElementById("route-report-rail")?.style.setProperty("display","none");

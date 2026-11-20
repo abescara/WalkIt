@@ -86,6 +86,8 @@ class MainActivity : ComponentActivity() {
     private var forwardingMapGesture = false
     private var searchOverlayActive = false
     private var routeResultsVisible = false
+    @Volatile private var routeSearchVisible = true
+    @Volatile private var routeSearchBottom = 350f
     private val placeSuggestionCache = mutableMapOf<String,org.json.JSONArray>()
     private val selectedPlaceCoordinates = mutableMapOf<String,LatLng>()
     private var lastPlaceSuggestionRequest = 0L
@@ -455,7 +457,10 @@ class MainActivity : ComponentActivity() {
             val designY=event.y/scale
             val designX=event.x/scale
             forwardingMapGesture=!searchOverlayActive && when(currentWebScreen) {
-                "Routes" -> if(routeResultsVisible) designY in 300f..550f && designX<225f else designY in 240f..550f
+                "Routes" -> {
+                    val belowSearch=!routeSearchVisible || designY>routeSearchBottom
+                    belowSearch && if(routeResultsVisible) designY in 120f..738f && designX<225f else designY in 240f..738f
+                }
                 else -> designY in 158f..738f
             }
         }
@@ -470,6 +475,10 @@ class MainActivity : ComponentActivity() {
     inner class FrontendBridge {
         @JavascriptInterface fun setSearchOverlayActive(active: Boolean) { searchOverlayActive=active }
         @JavascriptInterface fun setRouteResultsVisible(visible: Boolean) { routeResultsVisible=visible }
+        @JavascriptInterface fun setRouteSearchBounds(visible: Boolean,bottom: Double) {
+            routeSearchVisible=visible
+            routeSearchBottom=bottom.toFloat().coerceIn(200f,700f)
+        }
         @JavascriptInterface fun login(email: String,password: String) {
             worker.execute {
                 val result=runCatching {
