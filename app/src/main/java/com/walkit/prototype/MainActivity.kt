@@ -33,16 +33,17 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import org.maplibre.android.MapLibre
-import org.maplibre.android.annotations.IconFactory
-import org.maplibre.android.annotations.MarkerOptions
-import org.maplibre.android.annotations.Polyline
-import org.maplibre.android.annotations.PolylineOptions
-import org.maplibre.android.camera.CameraPosition
-import org.maplibre.android.camera.CameraUpdateFactory
-import org.maplibre.android.geometry.LatLng
-import org.maplibre.android.geometry.LatLngBounds
-import org.maplibre.android.maps.MapView
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.MapView
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.android.gms.maps.model.Marker
+import com.google.android.gms.maps.model.MarkerOptions
+import com.google.android.gms.maps.model.Polyline
+import com.google.android.gms.maps.model.PolylineOptions
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -67,7 +68,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var screen: FrameLayout
     private var userId: Long? = null
     private var mapView: MapView? = null
-    private var currentMap: org.maplibre.android.maps.MapLibreMap? = null
+    private var currentMap: GoogleMap? = null
     private var currentStyleReady = false
     private var selectedTab = Tab.MAP
     private val capturedPhotos = mutableListOf<String>()
@@ -181,9 +182,9 @@ class MainActivity : ComponentActivity() {
     private var pendingLocationListener: LocationListener? = null
     private var locationRequestInFlight = false
     private var lastUserLocation: LatLng? = null
-    private var userLocationMarker: org.maplibre.android.annotations.Marker? = null
+    private var userLocationMarker: Marker? = null
     private var mapParked = false
-    private val photoMarkerDetails = mutableMapOf<Long, PhotoMarkerDetail>()
+    private val photoMarkerDetails = mutableMapOf<String, PhotoMarkerDetail>()
     private var mapTarget = LatLng(14.5995,120.9842)
     private var mapZoom = 16.0
     private var startupLocationRequested = false
@@ -200,13 +201,13 @@ class MainActivity : ComponentActivity() {
     private var routeOriginField: EditText? = null
     private var routeDestinationField: EditText? = null
     private var routeLine: Polyline? = null
-    private val routeMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
+    private val routeMarkers = mutableListOf<Marker>()
 
     private enum class Tab { MAP, COMMUNITY, FORUMS, ROUTES, REWARDS, PROFILE }
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>, val cloudPhotoPaths: List<String> = emptyList())
     private val displayedCloudReports = mutableSetOf<String>()
-    private val remoteMarkers = mutableMapOf<String,org.maplibre.android.annotations.Marker>()
-    private val photoMarkers = mutableMapOf<Long,org.maplibre.android.annotations.Marker>()
+    private val remoteMarkers = mutableMapOf<String,Marker>()
+    private val photoMarkers = mutableMapOf<String,Marker>()
     private val hiddenPhotoDetails = mutableListOf<PhotoMarkerDetail>()
     private val queuedSharedPhotos = mutableSetOf<String>()
     private val photoMarkerMinZoom = 14.0
@@ -225,7 +226,6 @@ class MainActivity : ComponentActivity() {
                 mapZoom=16.0
             }
         }
-        MapLibre.getInstance(this)
         window.statusBarColor = Color.rgb(248, 250, 252)
         window.navigationBarColor = Color.WHITE
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
@@ -354,7 +354,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showAuthScreen(page: String) {
-        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom.toDouble() }
         disposeMap()
         clearFrontendView()
         screen.removeAllViews()
@@ -582,7 +582,7 @@ class MainActivity : ComponentActivity() {
             showTab(Tab.MAP)
             val target=LatLng(latitude,longitude)
             mapTarget=target; mapZoom=17.0
-            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(target,17.0),500)
+            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(target,17f),500,null)
         }
         @JavascriptInterface fun loadForumPosts() {
             val web=currentWebView
@@ -750,7 +750,7 @@ class MainActivity : ComponentActivity() {
         }
         @JavascriptInterface fun focusRouteReport(latitude: Double,longitude: Double) = runOnUiThread {
             if(latitude in 4.0..21.8 && longitude in 116.0..127.0)
-                currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(latitude,longitude),17.0),500)
+                currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(latitude,longitude),17f),500,null)
         }
         @JavascriptInterface fun getRouteOrigin(): String = if(lastUserLocation!=null) "Current Location" else ""
         @JavascriptInterface fun pickRoutePoint(which: String) = runOnUiThread {
@@ -784,7 +784,7 @@ class MainActivity : ComponentActivity() {
             if(latitude !in 4.0..21.8 || longitude !in 116.0..127.0) return@runOnUiThread
             val point=LatLng(latitude,longitude)
             mapTarget=point; mapZoom=16.0
-            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+            currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16f),650,null)
         }
         @JavascriptInterface fun searchMapPlace(query: String) {
             worker.execute {
@@ -793,7 +793,7 @@ class MainActivity : ComponentActivity() {
                     if(point==null) toast("Place not found in the Philippines.")
                     else {
                         mapTarget=point; mapZoom=16.0
-                        currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+                        currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16f),650,null)
                     }
                 }
             }
@@ -949,7 +949,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPhotoLocationPicker() {
-        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom.toDouble() }
         if(!returnToReportAfterPicker && lastUserLocation!=null && pickingRoutePoint==null) { mapTarget=lastUserLocation!!; mapZoom=16.0 }
         pickingPhotoLocation=true
         routePlannerVisible=false
@@ -961,7 +961,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun confirmPhotoLocation() {
-        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom.toDouble() }
         if(mapTarget.latitude !in 4.0..21.8 || mapTarget.longitude !in 116.0..127.0) {
             toast("Choose a point in the Philippines.")
             return
@@ -987,7 +987,7 @@ class MainActivity : ComponentActivity() {
         screen.addView(map,FrameLayout.LayoutParams(-1,-1))
         if(reused && mapParked) { map.onStart(); map.onResume() }
         mapParked=false
-        if(reused && currentMap!=null) currentMap?.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
+        if(reused && currentMap!=null) currentMap?.moveCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder().target(mapTarget).zoom(mapZoom.toFloat()).build()))
         if(reused) screen.post {
             runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
             currentMap?.let(::hydrateVisiblePhotoMarkers)
@@ -1053,27 +1053,27 @@ class MainActivity : ComponentActivity() {
           map.onCreate(null)
           map.onStart()
           map.onResume()
-          map.getMapAsync { maplibreMap ->
+          map.getMapAsync { googleMap ->
             if(mapView!==map) return@getMapAsync
-            currentMap=maplibreMap
-            maplibreMap.setStyle("https://styles.maptoolkit.org/street.json") {
-                if(mapView!==map) return@setStyle
+            currentMap=googleMap
+            run {
+                if(mapView!==map) return@run
                 currentStyleReady=true
-                maplibreMap.uiSettings.isCompassEnabled=false
-                maplibreMap.setLatLngBoundsForCameraTarget(LatLngBounds.from(21.5,127.0,4.0,116.0))
-                maplibreMap.cameraPosition=CameraPosition.Builder().target(mapTarget).zoom(mapZoom).build()
+                googleMap.uiSettings.isCompassEnabled=false
+                googleMap.setLatLngBoundsForCameraTarget(LatLngBounds(LatLng(4.0,116.0),LatLng(21.5,127.0)))
+                googleMap.moveCamera(CameraUpdateFactory.newLatLngZoom(mapTarget,mapZoom.toFloat()))
                 lastUserLocation?.let { addUserLocationMarker(it) }
                 photoMarkerDetails.clear(); hiddenPhotoDetails.clear(); photoMarkers.clear(); displayedCloudReports.clear(); remoteMarkers.clear()
-                maplibreMap.setOnMarkerClickListener { marker ->
+                googleMap.setOnMarkerClickListener { marker ->
                     photoMarkerDetails[marker.id]?.let { showPhotoDetails(it) }
                     true
                 }
-                maplibreMap.addOnCameraIdleListener {
-                    refreshPhotoMarkerVisibility(maplibreMap)
-                    hydrateVisiblePhotoMarkers(maplibreMap)
+                googleMap.setOnCameraIdleListener {
+                    refreshPhotoMarkerVisibility(googleMap)
+                    hydrateVisiblePhotoMarkers(googleMap)
                 }
                 runDb({ db.photoReports() }) { reports -> reports.forEach { addPhotoMarkers(it) } }
-                loadSharedReports(maplibreMap)
+                loadSharedReports(googleMap)
             }
           }
         }
@@ -1346,18 +1346,18 @@ class MainActivity : ComponentActivity() {
         val lineOptions=PolylineOptions().add(points.first()).color(Color.rgb(37,99,235)).width(6f)
         points.drop(1).forEach { lineOptions.add(it) }
         routeLine=map.addPolyline(lineOptions)
-        routeMarkers.add(map.addMarker(MarkerOptions().position(from).title("Point A")))
-        routeMarkers.add(map.addMarker(MarkerOptions().position(to).title("Point B")))
+        map.addMarker(MarkerOptions().position(from).title("Point A"))?.let(routeMarkers::add)
+        map.addMarker(MarkerOptions().position(to).title("Point B"))?.let(routeMarkers::add)
         val bounds=LatLngBounds.Builder().include(from).include(to).build()
-        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,dp(64)),800)
+        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,dp(64)),800,null)
         toast("Walking route ready.")
     }
 
     private fun clearDisplayedRoute() {
         val map=currentMap ?: return
-        routeLine?.let { map.removePolyline(it) }
+        routeLine?.remove()
         routeLine=null
-        routeMarkers.forEach { map.removeMarker(it) }
+        routeMarkers.forEach(Marker::remove)
         routeMarkers.clear()
         routeObstaclePoint=null
     }
@@ -1387,7 +1387,7 @@ class MainActivity : ComponentActivity() {
         captureInProgress=false
         cameraUsesFrontLens=false
         cameraFlashEnabled=false
-        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom.toDouble() }
         parkMap(); clearFrontendView(); screen.removeAllViews(); screen.setBackgroundColor(Color.BLACK)
         window.statusBarColor=Color.BLACK; window.navigationBarColor=Color.BLACK
         window.decorView.systemUiVisibility=0
@@ -1541,13 +1541,13 @@ class MainActivity : ComponentActivity() {
         if(currentWebScreen=="Routes") currentWebView?.evaluateJavascript(
             "window.walkItCurrentLocation && window.walkItCurrentLocation()",null)
         addUserLocationMarker(point)
-        currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16.0),650)
+        currentMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,16f),650,null)
     }
 
     private fun addUserLocationMarker(point: LatLng) {
         val map=currentMap ?: return
         if(!currentStyleReady) return
-        userLocationMarker?.let { map.removeMarker(it) }
+        userLocationMarker?.remove()
         val size=dp(24)
         val bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888)
         val canvas=Canvas(bitmap)
@@ -1558,7 +1558,7 @@ class MainActivity : ComponentActivity() {
         canvas.drawCircle(size/2f,size/2f,dp(8).toFloat(),paint)
         paint.color=Color.rgb(37,99,235)
         canvas.drawCircle(size/2f,size/2f,dp(6).toFloat(),paint)
-        val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
+        val icon=BitmapDescriptorFactory.fromBitmap(bitmap)
         userLocationMarker=map.addMarker(MarkerOptions().position(point).title("You are here").icon(icon))
     }
 
@@ -1707,7 +1707,7 @@ class MainActivity : ComponentActivity() {
         target.absolutePath.takeIf { target.exists() && target.length()>0 }
     }.getOrNull()
 
-    private fun loadSharedReports(map: org.maplibre.android.maps.MapLibreMap) {
+    private fun loadSharedReports(map: GoogleMap) {
         sharedWorker.execute {
             val result=runCatching {
                 val localIds=db.cloudReportIds()
@@ -1742,7 +1742,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun hydrateVisiblePhotoMarkers(map: org.maplibre.android.maps.MapLibreMap) {
+    private fun hydrateVisiblePhotoMarkers(map: GoogleMap) {
         if(currentMap!==map || !currentStyleReady || mapParked || map.cameraPosition.zoom<photoMarkerMinZoom) return
         val bounds=map.projection.visibleRegion.latLngBounds
         val center=map.cameraPosition.target ?: mapTarget
@@ -1763,7 +1763,7 @@ class MainActivity : ComponentActivity() {
                     queuedSharedPhotos.remove(path)
                     if(cached==null || currentMap!==map || !currentStyleReady) return@runOnUiThread
                     val previous=remoteMarkers.remove(cloudId) ?: return@runOnUiThread
-                    map.removeMarker(previous)
+                    previous.remove()
                     photoMarkerDetails.remove(previous.id)
                     photoMarkers.remove(previous.id)
                     addPhotoMarkers(detail.report.copy(photos=listOf(cached)),detail.cloudPhotoPaths)
@@ -1787,18 +1787,18 @@ class MainActivity : ComponentActivity() {
         }
         val markerSize=if(report.id<0) 30 else 34
         val bitmap=photos.firstOrNull()?.let { makePhotoBubble(it,markerSize) } ?: makePhotoPlaceholder(markerSize)
-        val icon=IconFactory.getInstance(this).fromBitmap(bitmap)
-        val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon))
+        val icon=BitmapDescriptorFactory.fromBitmap(bitmap)
+        val marker=map.addMarker(MarkerOptions().position(point).title(report.description).snippet("${report.time} · ${report.location}").icon(icon)) ?: return
         photoMarkerDetails[marker.id]=PhotoMarkerDetail(report,photos,cloudPhotoPaths)
         photoMarkers[marker.id]=marker
         if(report.id<0 && report.cloudId!=null) remoteMarkers[report.cloudId]=marker
     }
 
-    private fun refreshPhotoMarkerVisibility(map: org.maplibre.android.maps.MapLibreMap) {
+    private fun refreshPhotoMarkerVisibility(map: GoogleMap) {
         if(currentMap!==map || !currentStyleReady) return
         if(map.cameraPosition.zoom<photoMarkerMinZoom && photoMarkers.isNotEmpty()) {
             hiddenPhotoDetails.addAll(photoMarkerDetails.values)
-            photoMarkers.values.toList().forEach(map::removeMarker)
+            photoMarkers.values.toList().forEach(Marker::remove)
             photoMarkers.clear(); photoMarkerDetails.clear(); remoteMarkers.clear()
         } else if(map.cameraPosition.zoom>=photoMarkerMinZoom && hiddenPhotoDetails.isNotEmpty()) {
             val pending=hiddenPhotoDetails.toList()
@@ -2124,7 +2124,7 @@ class MainActivity : ComponentActivity() {
                         result.fold({
                             photoDialog?.dismiss()
                             val matching=photoMarkerDetails.filterValues { it.report.id==report.id && report.id>0 || it.report.cloudId==report.cloudId && report.cloudId!=null }
-                            matching.forEach { (id,_) -> photoMarkers.remove(id)?.let { marker -> currentMap?.removeMarker(marker) }; photoMarkerDetails.remove(id) }
+                            matching.forEach { (id,_) -> photoMarkers.remove(id)?.remove(); photoMarkerDetails.remove(id) }
                             hiddenPhotoDetails.removeAll { it.report.id==report.id && report.id>0 || it.report.cloudId==report.cloudId && report.cloudId!=null }
                             report.cloudId?.let { remoteMarkers.remove(it); displayedCloudReports.remove(it) }
                             toast("Report removed from the map.")
@@ -2227,7 +2227,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun parkMap() {
         val map=mapView ?: return
-        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom }
+        currentMap?.cameraPosition?.let { position -> position.target?.let { mapTarget=it }; mapZoom=position.zoom.toDouble() }
         if(!mapParked) { map.onPause(); map.onStop(); mapParked=true }
         (map.parent as? android.view.ViewGroup)?.removeView(map)
     }
