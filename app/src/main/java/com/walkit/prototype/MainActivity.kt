@@ -389,7 +389,7 @@ class MainActivity : ComponentActivity() {
             val designY=event.y/scale
             val designX=event.x/scale
             forwardingMapGesture=!searchOverlayActive && when(currentWebScreen) {
-                "Routes" -> if(routeResultsVisible) designY in 300f..550f && designX<225f else designY in 170f..650f
+                "Routes" -> if(routeResultsVisible) designY in 300f..550f && designX<225f else designY in 240f..550f
                 else -> designY in 158f..738f
             }
         }
@@ -1179,12 +1179,9 @@ class MainActivity : ComponentActivity() {
                 val separation=FloatArray(1)
                 Location.distanceBetween(from.latitude,from.longitude,to.latitude,to.longitude,separation)
                 require(separation[0]>20f) { "Choose two different places for the route." }
-                val points=runCatching { fetchWalkingRoute(from,to,avoidObstacle,"hiking-mountain") }
-                    .recoverCatching { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
-                    .getOrElse { failure ->
-                        if(avoidObstacle!=null) throw failure
-                        fetchValhallaWalkingRoute(from,to)
-                    }
+                val points=if(avoidObstacle==null) fetchValhallaWalkingRoute(from,to)
+                    else runCatching { fetchWalkingRoute(from,to,avoidObstacle,"hiking-mountain") }
+                        .getOrElse { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     displayRoute(points,from,to)
@@ -1241,7 +1238,7 @@ class MainActivity : ComponentActivity() {
         val pair="${from.longitude},${from.latitude}|${to.longitude},${to.latitude}"
         val query=URLEncoder.encode(pair,"UTF-8")
         val noGo=avoidObstacle?.let { "&nogos=${URLEncoder.encode("${it.longitude},${it.latitude},80","UTF-8")}" }.orEmpty()
-        val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=$profile&alternativeidx=0&format=geojson$noGo").openConnection() as HttpURLConnection).apply {
+        val connection=(URL("https://brouter.de/brouter?lonlats=$query&profile=$profile&profile:allow_ferries=0&alternativeidx=0&format=geojson$noGo").openConnection() as HttpURLConnection).apply {
             connectTimeout=15_000; readTimeout=30_000; requestMethod="GET"
         }
         val response=try {
@@ -1265,7 +1262,9 @@ class MainActivity : ComponentActivity() {
         val payload=JSONObject().put("locations",org.json.JSONArray()
             .put(JSONObject().put("lat",from.latitude).put("lon",from.longitude))
             .put(JSONObject().put("lat",to.latitude).put("lon",to.longitude)))
-            .put("costing","pedestrian").put("format","osrm").put("shape_format","geojson")
+            .put("costing","pedestrian")
+            .put("costing_options",JSONObject().put("pedestrian",JSONObject().put("use_ferry",0)))
+            .put("format","osrm").put("shape_format","geojson")
         val url="https://valhalla1.openstreetmap.de/route?json=${URLEncoder.encode(payload.toString(),"UTF-8")}"
         val connection=(URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout=15_000; readTimeout=30_000
@@ -1276,8 +1275,20 @@ class MainActivity : ComponentActivity() {
             if(connection.responseCode !in 200..299) error("Walking route unavailable (${connection.responseCode}). Try moving the pins closer to a road.")
             connection.inputStream.bufferedReader().use { it.readText() }
         } finally { connection.disconnect() }
-        val coordinates=JSONObject(response).getJSONArray("routes").getJSONObject(0)
-            .getJSONObject("geometry").getJSONArray("coordinates")
+        val route=JSONObject(response).getJSONArray("routes").getJSONObject(0)
+        val legs=route.getJSONArray("legs")
+        var checkedSteps=false
+        for(legIndex in 0 until legs.length()) {
+            val steps=legs.getJSONObject(legIndex).optJSONArray("steps") ?: continue
+            checkedSteps=true
+            for(stepIndex in 0 until steps.length()) {
+                val step=steps.getJSONObject(stepIndex)
+                if(step.optString("mode").equals("ferry",true) || step.optString("name").contains("ferry",true))
+                    error("This route needs a ferry. Choose places connected by walkable land routes.")
+            }
+        }
+        require(checkedSteps) { "This route has no walking directions to verify." }
+        val coordinates=route.getJSONObject("geometry").getJSONArray("coordinates")
         val points=(0 until coordinates.length()).map { index ->
             val coordinate=coordinates.getJSONArray(index)
             LatLng(coordinate.getDouble(1),coordinate.getDouble(0))

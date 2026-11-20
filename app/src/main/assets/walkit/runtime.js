@@ -281,10 +281,17 @@
     panel.id="route-preview-panel";
     const search=document.getElementById("route-origin")?.parentElement?.parentElement;
     if(search) search.id="route-search-panel";
+    const findButton=[...panel.querySelectorAll("button")].find(button=>button.textContent.trim()==="Find route");
+    if(findButton && search) {
+      search.appendChild(findButton);
+      findButton.style.cssText="margin-top:8px;width:100%;height:40px;border-radius:20px;border:0;background:#5fbe2a;color:#10300a;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px";
+    }
+    panel.style.cssText+=";left:16px;right:16px;bottom:112px;padding:12px;max-height:145px;overflow-y:auto;display:none";
+    panel.querySelectorAll("div").forEach(item=>{ if(item.textContent.includes("Accessibility and lighting details")) item.remove(); });
     const canvas=document.querySelector(".wrap > div");
     const toggles=document.createElement("div");
     toggles.id="route-panel-toggles";
-    toggles.style.cssText="position:absolute;right:12px;top:190px;z-index:12;display:none;flex-direction:column;gap:8px";
+    toggles.style.cssText="position:absolute;right:16px;bottom:76px;z-index:12;display:none;flex-direction:row;gap:8px";
     toggles.innerHTML='<button id="route-search-toggle" aria-label="Show route search" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:12px;font-weight:700">A→B</button><button id="route-preview-toggle" aria-label="Show route details" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:18px;font-weight:700">i</button>';
     canvas?.appendChild(toggles);
     const rail=document.createElement("div");
@@ -308,6 +315,8 @@
     const show=selected.style.display==="none";
     selected.style.display=show?"":"none";
     if(show && other) other.style.display="none";
+    const rail=document.getElementById("route-report-rail");
+    if(rail) rail.style.display=preview?.style.display==="none" && rail.dataset.hasRoute==="true"?"block":"none";
     document.getElementById("route-search-toggle")?.setAttribute("aria-expanded",String(search?.style.display!=="none"));
     document.getElementById("route-preview-toggle")?.setAttribute("aria-expanded",String(preview?.style.display!=="none"));
   }
@@ -316,7 +325,8 @@
     let reports=[]; try { reports=JSON.parse(payload); } catch (_) {}
     rail.innerHTML=`<b style="font-size:12px">Reports on route · ${reports.length}</b>`+
       (reports.length?reports.map(report=>`<button data-route-report-lat="${Number(report.latitude)}" data-route-report-lon="${Number(report.longitude)}" style="display:block;width:100%;padding:9px 2px;text-align:left;border:0;border-bottom:1px solid #ddd;background:none;color:inherit;font:12px Inter,sans-serif"><b>${escapeHtml(report.category||"Report")}</b><br>${escapeHtml(report.description||"")}<br><small>${Number(report.distance_m)||0} m from route</small></button>`).join(""):'<div style="font-size:11px;opacity:.65;margin-top:8px">No shared reports near this path.</div>');
-    rail.style.display="block";
+    rail.dataset.hasRoute="true";
+    rail.style.display=document.getElementById("route-preview-panel")?.style.display==="none"?"block":"none";
   };
   let suggestionTimer;
   function suggestionBox(field) {
@@ -782,14 +792,14 @@
   window.walkItRouteReady = function(summary,warning) {
     const status=document.getElementById("route-status");
     const details=document.getElementById("route-summary");
-    if(status) status.textContent=warning || "Walking route is ready on the map";
+    if(status) { status.textContent=warning || ""; status.parentElement.style.display=warning?"":"none"; }
     if(details) details.textContent=summary;
     const detour=document.getElementById("route-detour");
     if(detour) detour.style.display=warning ? "flex" : "none";
   };
   window.walkItRouteError = function(message) {
     const status=document.getElementById("route-status");
-    if(status) status.textContent=message;
+    if(status) { status.textContent=message; status.parentElement.style.display=""; }
     const detour=document.getElementById("route-detour");
     if(detour) detour.style.display="none";
     document.getElementById("route-search-panel")?.style.setProperty("display","");
