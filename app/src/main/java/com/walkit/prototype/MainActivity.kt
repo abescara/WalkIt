@@ -457,7 +457,7 @@ class MainActivity : ComponentActivity() {
             val designX=event.x/scale
             forwardingMapGesture=!searchOverlayActive && when(currentWebScreen) {
                 "Routes" -> !routeSearchVisible && if(routeResultsVisible) designY in 120f..738f && designX<225f else designY in 240f..738f
-                else -> designY in 158f..738f
+                else -> designY in 108f..738f
             }
         }
         if(!forwardingMapGesture) return false
