@@ -2,7 +2,7 @@ WalkIt - Current Features
 
 WalkIt is an Android prototype with a hybrid HTML/native frontend for mapping photo reports and planning routes in the Philippines.
 
-• Opens directly to an interactive MapLibre street map focused on the Philippines, with roads and map labels, framed by the supplied mobile screen design.
+• Opens directly to an interactive Google Maps street map focused on the Philippines, with roads and map labels, framed by the supplied mobile screen design.
 • Requests location when opening the map, centers on the user's position when available, and reuses the last known position on later launches.
 • Provides an in-app camera with Single and Batch capture, plus gallery photo selection.
 • After capture, lets the user pan and zoom beneath a fixed center pin to choose where the report belongs.

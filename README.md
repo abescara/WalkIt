@@ -4,7 +4,7 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 
 ## Status
 
-**Buildable MVP draft.** The prototype has Supabase account registration and email login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Signed-in users can view shared report markers, photos, and discussions, and post comments with optional photos. The route planner searches places, accepts map pins, warns about shared reports near a route, and can request a detour through BRouter. Google and Apple sign-in require [provider setup](docs/SHARED_ACCOUNTS_SETUP.md). Apply [the shared map migration](supabase/04_shared_map_reports.sql) before using photo and comment sharing.
+**Buildable MVP draft.** The prototype has Supabase account registration and email login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Signed-in users can view shared report markers, photos, and discussions, and post comments with optional photos. The route planner searches places, accepts map pins, warns about shared reports near a route, and can request a detour through BRouter. Google and Apple sign-in require [provider setup](docs/SHARED_ACCOUNTS_SETUP.md); Google Maps also requires [an Android Maps API key](docs/GOOGLE_MAPS_SETUP.md). Apply [the shared map migration](supabase/04_shared_map_reports.sql) before using photo and comment sharing.
 
 ## Planned prototype
 
@@ -14,7 +14,7 @@ WalkIt is a Kotlin Android prototype for recording pedestrian hazards and compar
 - Predefined pathway segments and routes, route comparison, saved routes, and preferences
 - A shared leaderboard and report badges based on reports uploaded to Supabase; route, detour, and forum badges are shown as upcoming
 - Supabase email/password accounts with local report storage and shared report metadata
-- Interactive MapLibre street map with road labels, OpenStreetMap data attribution, automatic location centering, photo-location picker, and tappable report markers
+- Interactive Google Maps street map with road labels, automatic location centering, photo-location picker, and tappable report markers
 - Expandable point-to-point route planner; route calculation needs an internet connection and uses the public BRouter service
 - Report discussion UI with comments, optional anonymous posting, and optional local photo attachments
 - Shared forum posts and replies after the forum migration is applied; no sample forum comments
