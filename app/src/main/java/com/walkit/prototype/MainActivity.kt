@@ -201,6 +201,7 @@ class MainActivity : ComponentActivity() {
     private var routeDestinationField: EditText? = null
     private var routeLine: Polyline? = null
     private val routeMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
+    private var routeCameraAnimation = 0
 
     private enum class Tab { MAP, COMMUNITY, FORUMS, ROUTES, REWARDS, PROFILE }
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>, val cloudPhotoPaths: List<String> = emptyList())
@@ -1343,17 +1344,27 @@ class MainActivity : ComponentActivity() {
     private fun displayRoute(points: List<LatLng>,from: LatLng,to: LatLng) {
         val map=currentMap ?: return
         clearDisplayedRoute()
+        val animation=routeCameraAnimation
         val lineOptions=PolylineOptions().add(points.first()).color(Color.rgb(37,99,235)).width(6f)
         points.drop(1).forEach { lineOptions.add(it) }
         routeLine=map.addPolyline(lineOptions)
         routeMarkers.add(map.addMarker(MarkerOptions().position(from).title("Point A")))
         routeMarkers.add(map.addMarker(MarkerOptions().position(to).title("Point B")))
-        val bounds=LatLngBounds.Builder().include(from).include(to).build()
-        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,dp(64)),800)
+        val builder=LatLngBounds.Builder()
+        points.forEach(builder::include)
+        val bounds=builder.build()
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(from,16.0),450,object: org.maplibre.android.maps.MapLibreMap.CancelableCallback {
+            override fun onFinish() {
+                if(currentMap===map && currentWebScreen=="Routes" && routeCameraAnimation==animation)
+                    map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,dp(80)),1350)
+            }
+            override fun onCancel() = Unit
+        })
         toast("Walking route ready.")
     }
 
     private fun clearDisplayedRoute() {
+        routeCameraAnimation++
         val map=currentMap ?: return
         routeLine?.let { map.removePolyline(it) }
         routeLine=null
