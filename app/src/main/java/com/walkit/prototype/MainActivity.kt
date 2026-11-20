@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
     private var photoDialog: Dialog? = null
     private var currentWebView: WebView? = null
     private var currentWebScreen: String? = null
+    private var tabTransitionOverlay: ImageView? = null
     private var returnToReportAfterPicker = false
     private var darkThemeEnabled = false
     private var replacingReportPhotos = false
@@ -286,6 +287,8 @@ class MainActivity : ComponentActivity() {
             else -> Unit
         }
         selectedTab=tab
+        val transition=makeTabTransitionOverlay()
+        finishTabTransition()
         parkMap()
         clearFrontendView()
         screen.removeAllViews()
@@ -294,6 +297,36 @@ class MainActivity : ComponentActivity() {
             Tab.ROUTES -> showMapScreen(routeMode=true)
             else -> Unit
         }
+        showTabTransitionOverlay(transition)
+    }
+
+    private fun makeTabTransitionOverlay(): ImageView? {
+        if(screen.width<=0 || screen.height<=0 || screen.childCount==0) return null
+        return runCatching {
+            val image=Bitmap.createBitmap(screen.width,screen.height,Bitmap.Config.RGB_565)
+            screen.draw(Canvas(image))
+            ImageView(this).apply {
+                setImageBitmap(image)
+                scaleType=ImageView.ScaleType.FIT_XY
+                isClickable=true
+            }
+        }.getOrNull()
+    }
+
+    private fun showTabTransitionOverlay(overlay: ImageView?) {
+        tabTransitionOverlay=overlay
+        if(overlay!=null) {
+            screen.addView(overlay,FrameLayout.LayoutParams(-1,-1))
+            overlay.postDelayed({ if(tabTransitionOverlay===overlay) finishTabTransition() },1800)
+        }
+    }
+
+    private fun finishTabTransition() {
+        tabTransitionOverlay?.let { overlay ->
+            (overlay.parent as? android.view.ViewGroup)?.removeView(overlay)
+            (overlay.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap?.recycle()
+        }
+        tabTransitionOverlay=null
     }
 
     private fun showEmptyScreen(title: String) {
@@ -301,6 +334,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showWebScreen(page: String) {
+        val transition=makeTabTransitionOverlay()
+        finishTabTransition()
         parkMap()
         clearFrontendView()
         screen.removeAllViews()
@@ -315,6 +350,7 @@ class MainActivity : ComponentActivity() {
         screen.setBackgroundColor(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
         val web=makeFrontendWebView(page)
         screen.addView(web,FrameLayout.LayoutParams(-1,-1))
+        showTabTransitionOverlay(transition)
     }
 
     private fun showAuthScreen(page: String) {
@@ -357,6 +393,7 @@ class MainActivity : ComponentActivity() {
                         view.post { view.evaluateJavascript("window.walkItResize && window.walkItResize()",null) }
                         view.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
                         view.evaluateJavascript("window.walkItRefreshPreview && window.walkItRefreshPreview()",null)
+                        view.postDelayed({ if(currentWebView===view) finishTabTransition() },80)
                     }
                 }
             }
