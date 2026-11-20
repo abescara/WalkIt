@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.Build
 import android.os.Looper
@@ -75,7 +76,7 @@ class MainActivity : ComponentActivity() {
     private var photoDialog: Dialog? = null
     private var currentWebView: WebView? = null
     private var currentWebScreen: String? = null
-    private var tabTransitionOverlay: ImageView? = null
+    private var tabTransitionOverlay: View? = null
     private var returnToReportAfterPicker = false
     private var darkThemeEnabled = false
     private var replacingReportPhotos = false
@@ -231,6 +232,7 @@ class MainActivity : ComponentActivity() {
         window.navigationBarColor = Color.WHITE
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         screen = FrameLayout(this)
+        setAppBackground(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
         setContentView(screen)
         if(intent?.data?.scheme=="walkit") { handleAuthRedirect(intent.data!!); return }
         runDb({ cloud.restore()?.let { cloud.profile() } }) { profile ->
@@ -274,6 +276,11 @@ class MainActivity : ComponentActivity() {
 
     private fun toast(message: String) = Toast.makeText(this,message,Toast.LENGTH_LONG).show()
 
+    private fun setAppBackground(color: Int) {
+        window.setBackgroundDrawable(ColorDrawable(color))
+        screen.setBackgroundColor(color)
+    }
+
     private fun showTab(tab: Tab) {
         if(userId==null) { showAuthScreen("Login"); return }
         if(tab==selectedTab && ((tab==Tab.MAP && currentWebScreen=="Main" && !pickingPhotoLocation) ||
@@ -288,8 +295,8 @@ class MainActivity : ComponentActivity() {
             else -> Unit
         }
         selectedTab=tab
-        val transition=makeTabTransitionOverlay()
         finishTabTransition()
+        val transition=makeTabTransitionOverlay()
         parkMap()
         clearFrontendView()
         screen.removeAllViews()
@@ -299,12 +306,16 @@ class MainActivity : ComponentActivity() {
             else -> Unit
         }
         showTabTransitionOverlay(transition)
+        mapView?.takeIf { tab==Tab.MAP || tab==Tab.ROUTES }?.let(::finishTransitionAfterMapFrame)
     }
 
-    private fun makeTabTransitionOverlay(): ImageView? {
+    private fun makeTabTransitionOverlay(): View? {
         if(screen.width<=0 || screen.height<=0 || screen.childCount==0) return null
-        // MapView renders through a separate surface, which screen.draw() captures as black.
-        if(mapView?.parent===screen) return null
+        // A MapView surface cannot be captured by View.draw(); cover it with the screen color.
+        if(mapView?.parent===screen) return View(this).apply {
+            setBackgroundColor(if(darkThemeEnabled && currentWebScreen!="Main" && currentWebScreen!="Routes") Color.rgb(24,24,24) else Color.WHITE)
+            isClickable=true
+        }
         return runCatching {
             val image=Bitmap.createBitmap(screen.width,screen.height,Bitmap.Config.RGB_565)
             screen.draw(Canvas(image))
@@ -316,7 +327,7 @@ class MainActivity : ComponentActivity() {
         }.getOrNull()
     }
 
-    private fun showTabTransitionOverlay(overlay: ImageView?) {
+    private fun showTabTransitionOverlay(overlay: View?) {
         tabTransitionOverlay=overlay
         if(overlay!=null) {
             screen.addView(overlay,FrameLayout.LayoutParams(-1,-1))
@@ -324,10 +335,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun finishTransitionAfterMapFrame(map: MapView) {
+        val overlay=tabTransitionOverlay ?: return
+        val listener=object: MapView.OnDidFinishRenderingFrameListener {
+            override fun onDidFinishRenderingFrame(fully: Boolean, frameTime: Double, frameEncodingTime: Double) {
+                map.removeOnDidFinishRenderingFrameListener(this)
+                runOnUiThread { if(tabTransitionOverlay===overlay && mapView===map) finishTabTransition() }
+            }
+        }
+        map.addOnDidFinishRenderingFrameListener(listener)
+        currentMap?.triggerRepaint()
+        overlay.postDelayed({ map.removeOnDidFinishRenderingFrameListener(listener) },1800)
+    }
+
     private fun finishTabTransition() {
         tabTransitionOverlay?.let { overlay ->
             (overlay.parent as? android.view.ViewGroup)?.removeView(overlay)
-            (overlay.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap?.recycle()
+            ((overlay as? ImageView)?.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap?.recycle()
         }
         tabTransitionOverlay=null
     }
@@ -337,8 +361,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showWebScreen(page: String) {
-        val transition=makeTabTransitionOverlay()
         finishTabTransition()
+        val transition=makeTabTransitionOverlay()
         parkMap()
         clearFrontendView()
         screen.removeAllViews()
@@ -350,7 +374,7 @@ class MainActivity : ComponentActivity() {
             "Profile", "Edit_Profile", "Notifications" -> Tab.PROFILE
             else -> Tab.MAP
         }
-        screen.setBackgroundColor(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
+        setAppBackground(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
         val web=makeFrontendWebView(page)
         screen.addView(web,FrameLayout.LayoutParams(-1,-1))
         showTabTransitionOverlay(transition)
@@ -361,7 +385,7 @@ class MainActivity : ComponentActivity() {
         disposeMap()
         clearFrontendView()
         screen.removeAllViews()
-        screen.setBackgroundColor(Color.WHITE)
+        setAppBackground(if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
         screen.addView(makeFrontendWebView(page),FrameLayout.LayoutParams(-1,-1))
     }
 
@@ -369,7 +393,7 @@ class MainActivity : ComponentActivity() {
         val darkPage="${page}_Dark"
         val assetPage=if(darkThemeEnabled && assetExists("walkit/screens/$darkPage.html")) darkPage else page
         val web=WebView(this).apply {
-            setBackgroundColor(Color.TRANSPARENT)
+            setBackgroundColor(if(page=="Main" || page=="Routes") Color.TRANSPARENT else if(darkThemeEnabled) Color.rgb(24,24,24) else Color.WHITE)
             isVerticalScrollBarEnabled=false
             isHorizontalScrollBarEnabled=false
             settings.javaScriptEnabled=true
@@ -396,7 +420,8 @@ class MainActivity : ComponentActivity() {
                         view.post { view.evaluateJavascript("window.walkItResize && window.walkItResize()",null) }
                         view.evaluateJavascript("window.walkItRefreshDraft && window.walkItRefreshDraft()",null)
                         view.evaluateJavascript("window.walkItRefreshPreview && window.walkItRefreshPreview()",null)
-                        view.postDelayed({ if(currentWebView===view) finishTabTransition() },80)
+                        if(currentWebScreen!="Main" && currentWebScreen!="Routes")
+                            view.postDelayed({ if(currentWebView===view) finishTabTransition() },80)
                     }
                 }
             }
@@ -982,7 +1007,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showMapScreen(photoLocationPicking: Boolean = false, routeMode: Boolean = false) {
         if(!routeMode) clearDisplayedRoute()
-        screen.setBackgroundColor(Color.WHITE)
+        setAppBackground(Color.WHITE)
         val reused=mapView!=null
         val map=mapView ?: MapView(this)
         mapView=map
