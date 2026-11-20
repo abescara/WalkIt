@@ -1,50 +1,39 @@
 # WalkIt
 
-WalkIt is a Kotlin Android prototype for recording pedestrian hazards and comparing predefined walking routes in the Philippines. Accounts and report rankings use Supabase; viewing the street map also requires an internet connection.
+WalkIt is an Android app for sharing pedestrian hazard reports in the Philippines and planning walking routes around them. It combines a Kotlin Android shell, Google Maps, an HTML interface, and Supabase for accounts and shared data.
 
-## Status
+## What works
 
-**Buildable MVP draft.** The prototype has Supabase account registration and email login, then opens the live Philippines map with a packaged HTML frontend. Users can capture a photo, choose its report location with a movable map-center pin, and save a description and time. Signed-in users can view shared report markers, photos, and discussions, and post comments with optional photos. The route planner searches places, accepts map pins, warns about shared reports near a route, and can request a detour through BRouter. Google and Apple sign-in require [provider setup](docs/SHARED_ACCOUNTS_SETUP.md); Google Maps also requires [an Android Maps API key](docs/GOOGLE_MAPS_SETUP.md). Apply [the shared map migration](supabase/04_shared_map_reports.sql) before using photo and comment sharing.
+- Email accounts, profiles, shared reports with photos, report discussions, community posts, friends, and a leaderboard.
+- In-app camera and gallery selection, followed by a map pin for choosing a report's location.
+- Place search and walking routes with nearby reports shown along the route.
+- Google sign in through Supabase's browser flow. The Google provider is enabled in the existing WalkIt Supabase project; a full sign in on a device still needs to be checked.
 
-For Google sign in on an APK installed directly on a phone, use the [Google sign-in setup tutorial](docs/PRODUCTION_GOOGLE_SETUP.md). No Play Store upload is needed. The APK in `artifacts/` is a debug build.
+See [CURRENT_FEATURES.txt](CURRENT_FEATURES.txt) for the fuller feature list and [the proposal](docs/WalkIt_Project_Proposal.pdf) for the original project brief.
 
-## Planned prototype
+## Build
 
-- Kotlin Android app in Android Studio
-- On-device SQLite database through `SQLiteOpenHelper`
-- Account-owned hazard reports with local persistence and owner-restricted changes
-- Predefined pathway segments and routes, route comparison, saved routes, and preferences
-- A shared leaderboard and report badges based on reports uploaded to Supabase; route, detour, and forum badges are shown as upcoming
-- Supabase email/password accounts with local report storage and shared report metadata
-- Interactive Google Maps street map with road labels, automatic location centering, photo-location picker, and tappable report markers
-- Expandable point-to-point route planner; route calculation needs an internet connection and uses the public BRouter service
-- Report discussion UI with comments, optional anonymous posting, and optional local photo attachments
-- Shared forum posts and replies after the forum migration is applied; no sample forum comments
-- Packaged mobile screen designs for community, routes, rewards, notifications, profile, and report flows; some content remains a visual prototype
+1. Open the repository in Android Studio with JDK 17 and Android SDK 36, or use `./gradlew :app:assembleDebug` (`.\gradlew.bat :app:assembleDebug` on Windows).
+2. Add `WALKIT_GOOGLE_MAPS_KEY=YOUR_ANDROID_MAPS_KEY` to the root `local.properties` file before building. That file is ignored by Git. The key must allow Maps SDK for Android and the app package `com.walkit.prototype` with the signing certificate's SHA-1. Google Maps requires a device with Google Play services and an internet connection.
+3. Install the generated APK from `app/build/outputs/apk/debug/`. A prebuilt development APK is also in [artifacts/WalkIt-debug.apk](artifacts/WalkIt-debug.apk).
 
-See [the project proposal](docs/WalkIt_Project_Proposal.pdf) for detailed requirements and [the implementation checklist](docs/IMPLEMENTATION_PLAN.md) for a development sequence.
+The Maps key is separate from the Google OAuth Web client used for sign in. Supabase owns the OAuth client secret; it must never be added to this repository. The app returns from the browser through `walkit://auth/callback`. The existing Supabase project has Google enabled, and its OAuth request redirects to Google; device sign in remains the final check.
 
-## Team development
+## Repository layout
 
-Read [the team workflow](docs/team/TEAM_WORKFLOW.md), [the code boundaries](docs/team/ARCHITECTURE.md), and the [Figma handoff guide](docs/design/FIGMA_HANDOFF.md) before splitting work. Pull requests run an Android debug build in GitHub Actions. Keep the Figma source of truth in the team Figma workspace and link it from the handoff guide.
+| Path | Purpose |
+| --- | --- |
+| `app/src/main/java/` | Android screens, camera, map, local storage, and Supabase integration |
+| `app/src/main/assets/walkit/` | Packaged HTML interface and assets |
+| `supabase/` | Database schema and numbered SQL changes |
+| `artifacts/` | Development APK |
+| `.github/workflows/` | Android build check for pushes and pull requests |
 
-## Getting started
+For a new Supabase project, run `supabase/schema.sql` and then the numbered SQL files in order. Existing projects should apply only changes they have not already run. Keep database passwords and service role keys outside the app and Git.
 
-1. Open this repository in Android Studio with JDK 17 and Android SDK 36 installed.
-2. Build and run the `app` configuration on an Android 8.0 (API 26) or newer device or emulator. Or run `./gradlew assembleDebug` (`.\gradlew.bat assembleDebug` on Windows).
-3. Create an account or log in, then from the Map screen tap the camera button, choose Single or Batch, capture photos, then tap Done in Batch mode. Pan the map beneath the center pin and choose the photo location, then add a category, description, and time. Tap a report marker to view its photos and add to its discussion. Open Routes, enter addresses or place names, or use the map pin buttons to choose start and destination.
+## Current limits
 
-The draft uses four clearly fictional pathway names and two sample routes. Replace them after the team agrees on the demonstration area. Street map tiles and route calculation require internet access. Report photos and report-marker discussions remain on-device; forum posts and replies are shared after the forum migration. See [shared accounts setup](docs/SHARED_ACCOUNTS_SETUP.md) for the hosted database and [prototype scope](docs/PROTOTYPE.md) for implemented behavior and known gaps.
-
-The HTML screen package and Android/native integration are described in [frontend integration](docs/FRONTEND_INTEGRATION.md).
-
-## Safety and data limitations
-
-The prototype's reports are local observations, not verified safety or accessibility guidance. A route with no active reports may still have unknown conditions. Use synthetic accounts and demonstration data. Do not publish real user data or credentials.
-
-## Team
-
-Sam Denielle Arias; Helijah Sephreen Coo; Angel John Escara; Daniel Kenneth Euginio; John Carlo Salvador.
+Reports are user observations and may be incomplete or inaccurate. Route data does not verify sidewalk accessibility, surface quality, or lighting. The APK is a debug build, and the Android build check compiles without a Maps key, so its output needs a key before the map can display.
 
 ## License
 
