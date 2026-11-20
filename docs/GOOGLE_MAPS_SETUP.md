@@ -1,6 +1,6 @@
 # Google Maps and Google sign in setup
 
-This page covers the current debug APK. For a public release, follow the [production setup tutorial](PRODUCTION_GOOGLE_SETUP.md), which uses the release signing certificate and a published Google OAuth app.
+This page covers the current debug APK's Google Maps key. To enable Google sign in on an APK installed directly on a phone, follow the [Google sign-in tutorial](PRODUCTION_GOOGLE_SETUP.md). No Play Store upload is needed.
 
 The Android app now uses Google Maps SDK for Android. A Google Maps API key is required to display the map. This key is separate from the Google OAuth credentials used for sign in.
 
