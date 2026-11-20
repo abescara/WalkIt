@@ -279,25 +279,40 @@
     const panel=status?.parentElement;
     if(!panel) return;
     panel.id="route-preview-panel";
-    const inactive=["wheelchair access","fewer stairs","smooth path","well lit"];
-    const filter=Array.from(panel.querySelectorAll("button")).find(button=>inactive.includes(labelFor(button).toLowerCase()))?.parentElement;
-    filter?.remove();
-    panel.style.transition="transform .25s ease, opacity .25s ease";
+    const search=document.getElementById("route-origin")?.parentElement?.parentElement;
+    if(search) search.id="route-search-panel";
+    const canvas=document.querySelector(".wrap > div");
+    const toggles=document.createElement("div");
+    toggles.id="route-panel-toggles";
+    toggles.style.cssText="position:absolute;right:12px;top:190px;z-index:12;display:none;flex-direction:column;gap:8px";
+    toggles.innerHTML='<button id="route-search-toggle" aria-label="Show route search" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:12px;font-weight:700">A→B</button><button id="route-preview-toggle" aria-label="Show route details" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:18px;font-weight:700">i</button>';
+    canvas?.appendChild(toggles);
     const rail=document.createElement("div");
     rail.id="route-report-rail";
-    rail.style.cssText=`position:absolute;right:12px;top:350px;width:144px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:8;box-sizing:border-box`;
-    document.querySelector(".wrap > div")?.appendChild(rail);
+    rail.style.cssText=`position:absolute;right:12px;top:300px;width:144px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:8;box-sizing:border-box`;
+    canvas?.appendChild(rail);
   }
   window.walkItRouteLoading=function() {
-    const panel=document.getElementById("route-preview-panel");
-    if(panel) { panel.style.top="180px"; panel.style.bottom="auto"; panel.style.transform="translateY(-18px)"; panel.style.opacity="0.3"; requestAnimationFrame(()=>{ panel.style.transform="translateY(0)"; panel.style.opacity="1"; }); }
+    document.getElementById("route-search-panel")?.style.setProperty("display","none");
+    document.getElementById("route-preview-panel")?.style.setProperty("display","none");
+    document.getElementById("route-panel-toggles")?.style.setProperty("display","flex");
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
     bridge.setRouteResultsVisible(true);
   };
+  function toggleRoutePanel(which) {
+    const search=document.getElementById("route-search-panel");
+    const preview=document.getElementById("route-preview-panel");
+    const selected=which==="search"?search:preview;
+    const other=which==="search"?preview:search;
+    if(!selected) return;
+    const show=selected.style.display==="none";
+    selected.style.display=show?"":"none";
+    if(show && other) other.style.display="none";
+    document.getElementById("route-search-toggle")?.setAttribute("aria-expanded",String(search?.style.display!=="none"));
+    document.getElementById("route-preview-toggle")?.setAttribute("aria-expanded",String(preview?.style.display!=="none"));
+  }
   window.walkItRouteReports=function(payload) {
     const rail=document.getElementById("route-report-rail"); if(!rail) return;
-    const panel=document.getElementById("route-preview-panel");
-    if(panel) rail.style.top=`${Math.max(350,panel.offsetTop+panel.offsetHeight+10)}px`;
     let reports=[]; try { reports=JSON.parse(payload); } catch (_) {}
     rail.innerHTML=`<b style="font-size:12px">Reports on route · ${reports.length}</b>`+
       (reports.length?reports.map(report=>`<button data-route-report-lat="${Number(report.latitude)}" data-route-report-lon="${Number(report.longitude)}" style="display:block;width:100%;padding:9px 2px;text-align:left;border:0;border-bottom:1px solid #ddd;background:none;color:inherit;font:12px Inter,sans-serif"><b>${escapeHtml(report.category||"Report")}</b><br>${escapeHtml(report.description||"")}<br><small>${Number(report.distance_m)||0} m from route</small></button>`).join(""):'<div style="font-size:11px;opacity:.65;margin-top:8px">No shared reports near this path.</div>');
@@ -521,6 +536,8 @@
       if (profileIcon && bridge) bridge.navigate("profile");
       return;
     }
+    if(button.id==="route-search-toggle") { toggleRoutePanel("search"); return; }
+    if(button.id==="route-preview-toggle") { toggleRoutePanel("preview"); return; }
     if(button.hasAttribute("data-route-report-lat")) {
       bridge.focusRouteReport(Number(button.dataset.routeReportLat),Number(button.dataset.routeReportLon));
       return;
@@ -775,6 +792,10 @@
     if(status) status.textContent=message;
     const detour=document.getElementById("route-detour");
     if(detour) detour.style.display="none";
+    document.getElementById("route-search-panel")?.style.setProperty("display","");
+    document.getElementById("route-preview-panel")?.style.setProperty("display","");
+    document.getElementById("route-panel-toggles")?.style.setProperty("display","none");
+    bridge.setRouteResultsVisible(false);
   };
   window.walkItSetFlash = function(enabled) {
     const flash = document.querySelector('[aria-label="Flash"]');
