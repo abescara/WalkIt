@@ -286,47 +286,49 @@
       search.appendChild(findButton);
       findButton.style.cssText="margin-top:8px;width:100%;height:40px;border-radius:20px;border:0;background:#5fbe2a;color:#10300a;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px";
     }
-    panel.style.cssText+=";left:16px;right:16px;bottom:112px;padding:12px;max-height:145px;overflow-y:auto;display:none";
+    panel.style.cssText+=";position:relative;left:auto;right:auto;bottom:auto;padding:0;max-height:none;overflow:visible;box-shadow:none;background:transparent;display:block";
     panel.querySelectorAll("div").forEach(item=>{ if(item.textContent.includes("Accessibility and lighting details")) item.remove(); });
+    search?.appendChild(panel);
     const canvas=document.querySelector(".wrap > div");
     const toggles=document.createElement("div");
     toggles.id="route-panel-toggles";
     toggles.style.cssText="position:absolute;right:16px;bottom:76px;z-index:12;display:none;flex-direction:row;gap:8px";
-    toggles.innerHTML='<button id="route-search-toggle" aria-label="Show route search" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:12px;font-weight:700">A→B</button><button id="route-preview-toggle" aria-label="Show route details" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:18px;font-weight:700">i</button>';
+    toggles.innerHTML='<button id="route-search-toggle" aria-label="Show route search" aria-expanded="false" style="width:46px;height:46px;border:0;border-radius:23px;background:#fff;color:#1e1e1e;box-shadow:0 3px 12px #0003;font-size:12px;font-weight:700">A→B</button>';
     canvas?.appendChild(toggles);
+    const reportsButton=document.createElement("button");
+    reportsButton.id="route-reports-toggle";
+    reportsButton.setAttribute("aria-expanded","false");
+    reportsButton.style.cssText=`position:absolute;right:12px;top:72px;z-index:13;display:none;padding:10px 12px;border:0;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;font:700 12px Inter,sans-serif`;
+    reportsButton.textContent="Reports on route · 0";
+    canvas?.appendChild(reportsButton);
     const rail=document.createElement("div");
     rail.id="route-report-rail";
-    rail.style.cssText=`position:absolute;right:12px;top:300px;width:144px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:8;box-sizing:border-box`;
+    rail.style.cssText=`position:absolute;right:12px;top:120px;width:220px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:13;box-sizing:border-box`;
     canvas?.appendChild(rail);
   }
   window.walkItRouteLoading=function() {
     document.getElementById("route-search-panel")?.style.setProperty("display","none");
-    document.getElementById("route-preview-panel")?.style.setProperty("display","none");
     document.getElementById("route-panel-toggles")?.style.setProperty("display","flex");
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
+    document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
     bridge.setRouteResultsVisible(true);
   };
   function toggleRoutePanel(which) {
     const search=document.getElementById("route-search-panel");
-    const preview=document.getElementById("route-preview-panel");
-    const selected=which==="search"?search:preview;
-    const other=which==="search"?preview:search;
-    if(!selected) return;
-    const show=selected.style.display==="none";
-    selected.style.display=show?"":"none";
-    if(show && other) other.style.display="none";
-    const rail=document.getElementById("route-report-rail");
-    if(rail) rail.style.display=preview?.style.display==="none" && rail.dataset.hasRoute==="true"?"block":"none";
+    if(!search) return;
+    const show=search.style.display==="none";
+    search.style.display=show?"":"none";
     document.getElementById("route-search-toggle")?.setAttribute("aria-expanded",String(search?.style.display!=="none"));
-    document.getElementById("route-preview-toggle")?.setAttribute("aria-expanded",String(preview?.style.display!=="none"));
   }
   window.walkItRouteReports=function(payload) {
     const rail=document.getElementById("route-report-rail"); if(!rail) return;
     let reports=[]; try { reports=JSON.parse(payload); } catch (_) {}
-    rail.innerHTML=`<b style="font-size:12px">Reports on route · ${reports.length}</b>`+
+    const toggle=document.getElementById("route-reports-toggle");
+    if(toggle) { toggle.textContent=`Reports on route · ${reports.length}`; toggle.style.display="block"; }
+    rail.innerHTML=
       (reports.length?reports.map(report=>`<button data-route-report-lat="${Number(report.latitude)}" data-route-report-lon="${Number(report.longitude)}" style="display:block;width:100%;padding:9px 2px;text-align:left;border:0;border-bottom:1px solid #ddd;background:none;color:inherit;font:12px Inter,sans-serif"><b>${escapeHtml(report.category||"Report")}</b><br>${escapeHtml(report.description||"")}<br><small>${Number(report.distance_m)||0} m from route</small></button>`).join(""):'<div style="font-size:11px;opacity:.65;margin-top:8px">No shared reports near this path.</div>');
     rail.dataset.hasRoute="true";
-    rail.style.display=document.getElementById("route-preview-panel")?.style.display==="none"?"block":"none";
+    rail.style.display="none";
   };
   let suggestionTimer;
   function suggestionBox(field) {
@@ -547,7 +549,11 @@
       return;
     }
     if(button.id==="route-search-toggle") { toggleRoutePanel("search"); return; }
-    if(button.id==="route-preview-toggle") { toggleRoutePanel("preview"); return; }
+    if(button.id==="route-reports-toggle") {
+      const rail=document.getElementById("route-report-rail");
+      if(rail) { const open=rail.style.display==="none"; rail.style.display=open?"block":"none"; button.setAttribute("aria-expanded",String(open)); }
+      return;
+    }
     if(button.hasAttribute("data-route-report-lat")) {
       bridge.focusRouteReport(Number(button.dataset.routeReportLat),Number(button.dataset.routeReportLon));
       return;
@@ -803,8 +809,9 @@
     const detour=document.getElementById("route-detour");
     if(detour) detour.style.display="none";
     document.getElementById("route-search-panel")?.style.setProperty("display","");
-    document.getElementById("route-preview-panel")?.style.setProperty("display","");
     document.getElementById("route-panel-toggles")?.style.setProperty("display","none");
+    document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
+    document.getElementById("route-report-rail")?.style.setProperty("display","none");
     bridge.setRouteResultsVisible(false);
   };
   window.walkItSetFlash = function(enabled) {

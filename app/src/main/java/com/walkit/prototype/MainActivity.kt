@@ -1226,7 +1226,6 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
                     if(currentWebScreen!="Routes") return@runOnUiThread
-                    displayRoute(points,from,to)
                     val length=points.zipWithNext().sumOf { (a,b) ->
                         val result=FloatArray(1)
                         Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,result)
@@ -1234,6 +1233,7 @@ class MainActivity : ComponentActivity() {
                     }
                     val minutes=kotlin.math.max(1,(length/1.2/60).toInt())
                     val summary="Walking route · ${minutes} min · ${"%.1f".format(Locale.US,length/1000)} km"
+                    displayRoute(points,from,to,"${minutes} min · ${"%.1f".format(Locale.US,length/1000)} km")
                     currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},'')",null)
                     worker.execute {
                         val reports=runCatching {
@@ -1343,7 +1343,7 @@ class MainActivity : ComponentActivity() {
         currentWebView?.evaluateJavascript("window.walkItRouteError && window.walkItRouteError(${JSONObject.quote(message)})",null)
     }
 
-    private fun displayRoute(points: List<LatLng>,from: LatLng,to: LatLng) {
+    private fun displayRoute(points: List<LatLng>,from: LatLng,to: LatLng,label: String) {
         val map=currentMap ?: return
         clearDisplayedRoute()
         val animation=routeCameraAnimation
@@ -1352,6 +1352,20 @@ class MainActivity : ComponentActivity() {
         routeLine=map.addPolyline(lineOptions)
         routeMarkers.add(map.addMarker(MarkerOptions().position(from).title("Point A")))
         routeMarkers.add(map.addMarker(MarkerOptions().position(to).title("Point B")))
+        val labelPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color=Color.rgb(17,24,39); textSize=dp(14).toFloat(); typeface=android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val labelWidth=labelPaint.measureText(label).toInt()+dp(28)
+        val labelHeight=dp(38)
+        val labelBitmap=Bitmap.createBitmap(labelWidth,labelHeight,Bitmap.Config.ARGB_8888)
+        val labelCanvas=Canvas(labelBitmap)
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color=Color.WHITE
+            labelCanvas.drawRoundRect(0f,0f,labelWidth.toFloat(),labelHeight.toFloat(),dp(18).toFloat(),dp(18).toFloat(),this)
+        }
+        labelCanvas.drawText(label,dp(14).toFloat(),labelHeight/2f-(labelPaint.ascent()+labelPaint.descent())/2f,labelPaint)
+        val labelIcon=IconFactory.getInstance(this).fromBitmap(labelBitmap)
+        routeMarkers.add(map.addMarker(MarkerOptions().position(points[points.size/2]).icon(labelIcon).title(label)))
         val builder=LatLngBounds.Builder()
         points.forEach(builder::include)
         val bounds=builder.build()
