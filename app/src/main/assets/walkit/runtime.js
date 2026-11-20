@@ -281,7 +281,18 @@
     const findButton=document.createElement("button");
     findButton.textContent="Find route";
     findButton.style.cssText="margin-top:8px;width:100%;height:40px;border-radius:20px;border:0;background:#5fbe2a;color:#10300a;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px";
+    const preferences=document.createElement("div");
+    preferences.id="route-accessibility-preferences";
+    preferences.style.cssText="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0";
+    preferences.innerHTML='<span style="width:100%;font-size:12px;font-weight:700">Route preferences</span>'+[
+      ["wheelchair","Wheelchair profile"],["fewerStairs","Fewer stairs"],["preferSidewalks","Prefer sidewalks"]
+    ].map(([key,label])=>`<button type="button" data-route-preference="${key}" aria-pressed="false" style="border:1px solid #aaa;border-radius:16px;background:transparent;color:inherit;padding:7px 10px;font-size:11px">${label}</button>`).join("")+
+      '<small style="width:100%;opacity:.7;font-size:10px">Applied when you tap Find route. Map data cannot confirm ramp access, surface condition, or lighting.</small>';
+    search.appendChild(preferences);
     search.appendChild(findButton);
+    let savedPreferences={};
+    try { savedPreferences=JSON.parse(localStorage.getItem("walkit-route-preferences")||"{}"); } catch (_) {}
+    preferences.querySelectorAll("[data-route-preference]").forEach(button=>setRoutePreference(button,Boolean(savedPreferences[button.dataset.routePreference])));
     const canvas=document.querySelector(".wrap > div");
     const toggles=document.createElement("div");
     toggles.id="route-panel-toggles";
@@ -298,6 +309,15 @@
     rail.id="route-report-rail";
     rail.style.cssText=`position:absolute;right:12px;top:120px;width:220px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:13;box-sizing:border-box`;
     canvas?.appendChild(rail);
+  }
+  function setRoutePreference(button,enabled) {
+    button.setAttribute("aria-pressed",String(enabled));
+    button.style.background=enabled?"#5fbe2a":"transparent";
+    button.style.borderColor=enabled?"#5fbe2a":"#aaa";
+    button.style.color=enabled?"#10300a":"inherit";
+  }
+  function routePreferences() {
+    return Object.fromEntries([...document.querySelectorAll("[data-route-preference]")].map(button=>[button.dataset.routePreference,button.getAttribute("aria-pressed")==="true"]));
   }
   window.walkItRouteLoading=function() {
     document.getElementById("route-search-panel")?.style.setProperty("display","none");
@@ -546,6 +566,11 @@
       return;
     }
     if(button.id==="route-search-toggle") { toggleRoutePanel("search"); return; }
+    if(button.hasAttribute("data-route-preference")) {
+      setRoutePreference(button,button.getAttribute("aria-pressed")!=="true");
+      localStorage.setItem("walkit-route-preferences",JSON.stringify(routePreferences()));
+      return;
+    }
     if(button.id==="route-reports-toggle") {
       const rail=document.getElementById("route-report-rail");
       if(rail) { const open=rail.style.display==="none"; rail.style.display=open?"block":"none"; button.setAttribute("aria-expanded",String(open)); }
@@ -714,14 +739,10 @@
         return;
       }
       window.walkItRouteLoading();
-      if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim());
+      if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim(),JSON.stringify(routePreferences()));
       return;
     }
     if (lower === "find detour") { if (bridge) bridge.planDetour(); return; }
-    if (screenName === "Routes" && ["wheelchair access", "fewer stairs", "smooth path", "well lit"].includes(lower)) {
-      if (bridge) bridge.showMessage("This route data cannot verify accessibility, stairs, surfaces, or lighting yet.");
-      return;
-    }
     if (lower === "done" || lower === "back to map" || lower === "home") { if (bridge) bridge.navigate("map"); return; }
     if (lower === "create a forum") { showForumComposer(); return; }
     if (lower === "save changes") { if (bridge) bridge.showMessage("Profile editing is a visual prototype in this build."); return; }
@@ -741,7 +762,7 @@
       if (bridge) bridge.submitReport(window.walkItCategory || "Broken sidewalk", detail.value.trim());
       return;
     }
-    if (["forum", "local updates", "all", "reports", "saved places", "this week", "wheelchair access", "fewer stairs", "smooth path", "well lit", "still there", "fixed", "needs details"].includes(lower)) {
+    if (["forum", "local updates", "all", "reports", "saved places", "this week", "still there", "fixed", "needs details"].includes(lower)) {
       const group = button.parentElement ? Array.from(button.parentElement.querySelectorAll("button")) : [button];
       setSelected(button, group);
       return;

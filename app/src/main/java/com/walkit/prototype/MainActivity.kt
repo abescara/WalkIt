@@ -205,6 +205,7 @@ class MainActivity : ComponentActivity() {
     private var routeCameraAnimation = 0
 
     private enum class Tab { MAP, COMMUNITY, FORUMS, ROUTES, REWARDS, PROFILE }
+    private data class RoutePreferences(val wheelchair: Boolean=false,val fewerStairs: Boolean=false,val preferSidewalks: Boolean=false)
     private data class PhotoMarkerDetail(val report: PhotoReport, val photos: List<String>, val cloudPhotoPaths: List<String> = emptyList())
     private val displayedCloudReports = mutableSetOf<String>()
     private val remoteMarkers = mutableMapOf<String,org.maplibre.android.annotations.Marker>()
@@ -765,10 +766,12 @@ class MainActivity : ComponentActivity() {
             routePlannerVisible=true
             showTab(Tab.MAP)
         }
-        @JavascriptInterface fun planRoute(origin: String,destination: String) = runOnUiThread {
+        @JavascriptInterface fun planRoute(origin: String,destination: String,preferencesJson: String) = runOnUiThread {
             val start=EditText(this@MainActivity).apply { setText(origin) }
             val end=EditText(this@MainActivity).apply { setText(destination) }
-            requestWalkingRoute(start,end,TextView(this@MainActivity))
+            val choices=runCatching { JSONObject(preferencesJson) }.getOrDefault(JSONObject())
+            val preferences=RoutePreferences(choices.optBoolean("wheelchair"),choices.optBoolean("fewerStairs"),choices.optBoolean("preferSidewalks"))
+            requestWalkingRoute(start,end,TextView(this@MainActivity),preferences=preferences)
         }
         @JavascriptInterface fun planDetour() = runOnUiThread {
             val obstacle=routeObstaclePoint ?: run { routeError("Find a route with a reported obstacle first."); return@runOnUiThread }
@@ -1225,7 +1228,7 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) { null }
     }
 
-    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView,avoidObstacle: LatLng?=null) {
+    private fun requestWalkingRoute(start: EditText,end: EditText,button: TextView,avoidObstacle: LatLng?=null,preferences: RoutePreferences=RoutePreferences()) {
         val startQuery=start.text.toString().trim()
         val endQuery=end.text.toString().trim()
         if(startQuery.isBlank() || endQuery.isBlank()) { routeError("Enter a start and destination address."); return }
@@ -1245,7 +1248,7 @@ class MainActivity : ComponentActivity() {
                 val separation=FloatArray(1)
                 Location.distanceBetween(from.latitude,from.longitude,to.latitude,to.longitude,separation)
                 require(separation[0]>20f) { "Choose two different places for the route." }
-                val points=if(avoidObstacle==null) fetchValhallaWalkingRoute(from,to)
+                val points=if(avoidObstacle==null) fetchValhallaWalkingRoute(from,to,preferences)
                     else runCatching { fetchWalkingRoute(from,to,avoidObstacle,"hiking-mountain") }
                         .getOrElse { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
                 runOnUiThread {
@@ -1256,7 +1259,7 @@ class MainActivity : ComponentActivity() {
                         Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,result)
                         result[0].toDouble()
                     }
-                    val minutes=kotlin.math.max(1,(length/1.2/60).toInt())
+                    val minutes=kotlin.math.max(1,(length/(if(preferences.wheelchair) 0.9 else 1.2)/60).toInt())
                     val summary="Walking route · ${minutes} min · ${"%.1f".format(Locale.US,length/1000)} km"
                     displayRoute(points,from,to,"${minutes} min · ${"%.1f".format(Locale.US,length/1000)} km")
                     currentWebView?.evaluateJavascript("window.walkItRouteReady && window.walkItRouteReady(${JSONObject.quote(summary)},'')",null)
@@ -1325,12 +1328,19 @@ class MainActivity : ComponentActivity() {
         return points
     }
 
-    private fun fetchValhallaWalkingRoute(from: LatLng,to: LatLng): List<LatLng> {
+    private fun fetchValhallaWalkingRoute(from: LatLng,to: LatLng,preferences: RoutePreferences): List<LatLng> {
+        val pedestrian=JSONObject().put("use_ferry",0)
+        if(preferences.wheelchair) pedestrian.put("type","wheelchair")
+        if(preferences.fewerStairs) pedestrian.put("step_penalty",1800)
+        if(preferences.preferSidewalks) {
+            pedestrian.put("sidewalk_factor",0.5)
+            pedestrian.put("walkway_factor",0.7)
+        }
         val payload=JSONObject().put("locations",org.json.JSONArray()
             .put(JSONObject().put("lat",from.latitude).put("lon",from.longitude))
             .put(JSONObject().put("lat",to.latitude).put("lon",to.longitude)))
             .put("costing","pedestrian")
-            .put("costing_options",JSONObject().put("pedestrian",JSONObject().put("use_ferry",0)))
+            .put("costing_options",JSONObject().put("pedestrian",pedestrian))
             .put("format","osrm").put("shape_format","geojson")
         val url="https://valhalla1.openstreetmap.de/route?json=${URLEncoder.encode(payload.toString(),"UTF-8")}"
         val connection=(URL(url).openConnection() as HttpURLConnection).apply {
