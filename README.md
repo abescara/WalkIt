@@ -1,6 +1,6 @@
 # WalkIt
 
-WalkIt is an Android app for sharing pedestrian hazard reports in the Philippines and planning walking routes around them. It combines a Kotlin Android shell, Google Maps, an HTML interface, and Supabase for accounts and shared data.
+WalkIt is an Android app for sharing pedestrian hazard reports in the Philippines and planning walking routes around them. It combines a Kotlin Android shell, a MapLibre street map, an HTML interface, and Supabase for accounts and shared data.
 
 ## What works
 
@@ -14,10 +14,10 @@ See [CURRENT_FEATURES.txt](CURRENT_FEATURES.txt) for the fuller feature list and
 ## Build
 
 1. Open the repository in Android Studio with JDK 17 and Android SDK 36, or use `./gradlew :app:assembleDebug` (`.\gradlew.bat :app:assembleDebug` on Windows).
-2. Add `WALKIT_GOOGLE_MAPS_KEY=YOUR_ANDROID_MAPS_KEY` to the root `local.properties` file before building. That file is ignored by Git. The key must allow Maps SDK for Android and the app package `com.walkit.prototype` with the signing certificate's SHA-1. Google Maps requires a device with Google Play services and an internet connection.
+2. Build the app. Street map tiles and route planning require an internet connection; the map does not need a Google Maps API key or Google Cloud billing.
 3. Install the generated APK from `app/build/outputs/apk/debug/`. A prebuilt development APK is also in [artifacts/WalkIt-debug.apk](artifacts/WalkIt-debug.apk).
 
-The Maps key is separate from the Google OAuth Web client used for sign in. Supabase owns the OAuth client secret; it must never be added to this repository. The app returns from the browser through `walkit://auth/callback`. The existing Supabase project has Google enabled, and its OAuth request redirects to Google; device sign in remains the final check.
+Google sign in is separate from the map. Supabase owns the OAuth Web client secret; it must never be added to this repository. The app returns from the browser through `walkit://auth/callback`. The existing Supabase project has Google enabled, and its OAuth request redirects to Google; device sign in remains the final check.
 
 ## Repository layout
 
@@ -33,7 +33,7 @@ For a new Supabase project, run `supabase/schema.sql` and then the numbered SQL 
 
 ## Current limits
 
-Reports are user observations and may be incomplete or inaccurate. Route data does not verify sidewalk accessibility, surface quality, or lighting. The APK is a debug build, and the Android build check compiles without a Maps key, so its output needs a key before the map can display.
+Reports are user observations and may be incomplete or inaccurate. Route data does not verify sidewalk accessibility, surface quality, or lighting. The APK is a debug build. Map tiles come from an online third-party style and may be unavailable if that service is down.
 
 ## License
 
