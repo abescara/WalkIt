@@ -275,20 +275,13 @@
   }
   function prepareRouteScreen() {
     if(screenName!=="Routes") return;
-    const status=document.getElementById("route-status");
-    const panel=status?.parentElement;
-    if(!panel) return;
-    panel.id="route-preview-panel";
     const search=document.getElementById("route-origin")?.parentElement?.parentElement;
-    if(search) search.id="route-search-panel";
-    const findButton=[...panel.querySelectorAll("button")].find(button=>button.textContent.trim()==="Find route");
-    if(findButton && search) {
-      search.appendChild(findButton);
-      findButton.style.cssText="margin-top:8px;width:100%;height:40px;border-radius:20px;border:0;background:#5fbe2a;color:#10300a;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px";
-    }
-    panel.style.cssText+=";position:relative;left:auto;right:auto;bottom:auto;padding:0;max-height:none;overflow:visible;box-shadow:none;background:transparent;display:block";
-    panel.querySelectorAll("div").forEach(item=>{ if(item.textContent.includes("Accessibility and lighting details")) item.remove(); });
-    search?.appendChild(panel);
+    if(!search) return;
+    search.id="route-search-panel";
+    const findButton=document.createElement("button");
+    findButton.textContent="Find route";
+    findButton.style.cssText="margin-top:8px;width:100%;height:40px;border-radius:20px;border:0;background:#5fbe2a;color:#10300a;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px";
+    search.appendChild(findButton);
     const canvas=document.querySelector(".wrap > div");
     const toggles=document.createElement("div");
     toggles.id="route-panel-toggles";
@@ -716,7 +709,6 @@
         if (bridge) bridge.showMessage("Enter a start and destination place or address.");
         return;
       }
-      document.getElementById("route-status").textContent = "Finding a walking route…";
       window.walkItRouteLoading();
       if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim());
       return;
@@ -795,19 +787,8 @@
     if(view) view.textContent=message;
     document.querySelectorAll("#login-submit,#signup-submit").forEach(button=>button.disabled=false);
   };
-  window.walkItRouteReady = function(summary,warning) {
-    const status=document.getElementById("route-status");
-    const details=document.getElementById("route-summary");
-    if(status) { status.textContent=warning || ""; status.parentElement.style.display=warning?"":"none"; }
-    if(details) details.textContent=summary;
-    const detour=document.getElementById("route-detour");
-    if(detour) detour.style.display=warning ? "flex" : "none";
-  };
+  window.walkItRouteReady = function() {};
   window.walkItRouteError = function(message) {
-    const status=document.getElementById("route-status");
-    if(status) { status.textContent=message; status.parentElement.style.display=""; }
-    const detour=document.getElementById("route-detour");
-    if(detour) detour.style.display="none";
     document.getElementById("route-search-panel")?.style.setProperty("display","");
     document.getElementById("route-panel-toggles")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
