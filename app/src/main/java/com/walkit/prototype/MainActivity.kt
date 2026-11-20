@@ -303,6 +303,8 @@ class MainActivity : ComponentActivity() {
 
     private fun makeTabTransitionOverlay(): ImageView? {
         if(screen.width<=0 || screen.height<=0 || screen.childCount==0) return null
+        // MapView renders through a separate surface, which screen.draw() captures as black.
+        if(mapView?.parent===screen) return null
         return runCatching {
             val image=Bitmap.createBitmap(screen.width,screen.height,Bitmap.Config.RGB_565)
             screen.draw(Canvas(image))
