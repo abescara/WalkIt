@@ -978,6 +978,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showMapScreen(photoLocationPicking: Boolean = false, routeMode: Boolean = false) {
+        if(!routeMode) clearDisplayedRoute()
         screen.setBackgroundColor(Color.WHITE)
         val reused=mapView!=null
         val map=mapView ?: MapView(this)
@@ -1221,6 +1222,7 @@ class MainActivity : ComponentActivity() {
                         .getOrElse { fetchWalkingRoute(from,to,avoidObstacle,"trekking") }
                 runOnUiThread {
                     button.isEnabled=true; button.text="Find route"
+                    if(currentWebScreen!="Routes") return@runOnUiThread
                     displayRoute(points,from,to)
                     val length=points.zipWithNext().sumOf { (a,b) ->
                         val result=FloatArray(1)
@@ -1340,9 +1342,7 @@ class MainActivity : ComponentActivity() {
 
     private fun displayRoute(points: List<LatLng>,from: LatLng,to: LatLng) {
         val map=currentMap ?: return
-        routeLine?.let { map.removePolyline(it) }
-        routeMarkers.forEach { map.removeMarker(it) }
-        routeMarkers.clear()
+        clearDisplayedRoute()
         val lineOptions=PolylineOptions().add(points.first()).color(Color.rgb(37,99,235)).width(6f)
         points.drop(1).forEach { lineOptions.add(it) }
         routeLine=map.addPolyline(lineOptions)
@@ -1351,6 +1351,15 @@ class MainActivity : ComponentActivity() {
         val bounds=LatLngBounds.Builder().include(from).include(to).build()
         map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,dp(64)),800)
         toast("Walking route ready.")
+    }
+
+    private fun clearDisplayedRoute() {
+        val map=currentMap ?: return
+        routeLine?.let { map.removePolyline(it) }
+        routeLine=null
+        routeMarkers.forEach { map.removeMarker(it) }
+        routeMarkers.clear()
+        routeObstaclePoint=null
     }
 
     private fun requestCamera() {
