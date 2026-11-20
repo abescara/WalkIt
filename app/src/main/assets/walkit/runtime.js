@@ -304,6 +304,7 @@
     document.getElementById("route-panel-toggles")?.style.setProperty("display","flex");
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
+    document.getElementById("route-reports-toggle")?.setAttribute("aria-expanded","false");
     bridge.setRouteResultsVisible(true);
   };
   function toggleRoutePanel(which) {
@@ -311,13 +312,16 @@
     if(!search) return;
     const show=search.style.display==="none";
     search.style.display=show?"":"none";
+    const reports=document.getElementById("route-reports-toggle");
+    if(reports) { reports.style.display=show?"none":document.getElementById("route-report-rail")?.dataset.hasRoute==="true"?"block":"none"; reports.setAttribute("aria-expanded","false"); }
+    document.getElementById("route-report-rail")?.style.setProperty("display","none");
     document.getElementById("route-search-toggle")?.setAttribute("aria-expanded",String(search?.style.display!=="none"));
   }
   window.walkItRouteReports=function(payload) {
     const rail=document.getElementById("route-report-rail"); if(!rail) return;
     let reports=[]; try { reports=JSON.parse(payload); } catch (_) {}
     const toggle=document.getElementById("route-reports-toggle");
-    if(toggle) { toggle.textContent=`Reports on route · ${reports.length}`; toggle.style.display="block"; }
+    if(toggle) { toggle.textContent=`Reports on route · ${reports.length}`; toggle.style.display=document.getElementById("route-search-panel")?.style.display==="none"?"block":"none"; toggle.setAttribute("aria-expanded","false"); }
     rail.innerHTML=
       (reports.length?reports.map(report=>`<button data-route-report-lat="${Number(report.latitude)}" data-route-report-lon="${Number(report.longitude)}" style="display:block;width:100%;padding:9px 2px;text-align:left;border:0;border-bottom:1px solid #ddd;background:none;color:inherit;font:12px Inter,sans-serif"><b>${escapeHtml(report.category||"Report")}</b><br>${escapeHtml(report.description||"")}<br><small>${Number(report.distance_m)||0} m from route</small></button>`).join(""):'<div style="font-size:11px;opacity:.65;margin-top:8px">No shared reports near this path.</div>');
     rail.dataset.hasRoute="true";
