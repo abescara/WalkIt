@@ -18,7 +18,7 @@
     canvas.style.transformOrigin = "top left";
     canvas.style.width = "390px";
     canvas.style.height = `${logicalHeight}px`;
-    updateRouteSearchBounds();
+    updateRouteSearchVisibility();
   }
   window.walkItResize = sizeToDevice;
   if (window.visualViewport) window.visualViewport.addEventListener("resize", sizeToDevice);
@@ -280,6 +280,7 @@
     if(!search) return;
     search.id="route-search-panel";
     const findButton=document.createElement("button");
+    findButton.id="route-find-button";
     findButton.textContent="Find route";
     findButton.style.cssText="margin-top:8px;width:100%;height:40px;border-radius:20px;border:0;background:#5fbe2a;color:#10300a;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px";
     const preferences=document.createElement("div");
@@ -291,6 +292,11 @@
       '<small style="width:100%;opacity:.7;font-size:10px">Applied when you tap Find route. Map data cannot confirm ramp access, surface condition, or lighting.</small>';
     search.appendChild(preferences);
     search.appendChild(findButton);
+    const routeMessage=document.createElement("div");
+    routeMessage.id="route-search-message";
+    routeMessage.setAttribute("role","status");
+    routeMessage.style.cssText="display:none;font-size:12px;line-height:1.4;padding:2px 0";
+    search.appendChild(routeMessage);
     let savedPreferences={};
     try { savedPreferences=JSON.parse(localStorage.getItem("walkit-route-preferences")||"{}"); } catch (_) {}
     preferences.querySelectorAll("[data-route-preference]").forEach(button=>setRoutePreference(button,Boolean(savedPreferences[button.dataset.routePreference])));
@@ -310,16 +316,12 @@
     rail.id="route-report-rail";
     rail.style.cssText=`position:absolute;right:12px;top:120px;width:220px;max-height:330px;overflow-y:auto;display:none;padding:10px;border-radius:14px;background:${fileName.endsWith('_Dark')?'#1e1e1e':'#fff'};color:${fileName.endsWith('_Dark')?'#fff':'#222'};box-shadow:0 4px 16px #0003;z-index:13;box-sizing:border-box`;
     canvas?.appendChild(rail);
-    updateRouteSearchBounds();
+    updateRouteSearchVisibility();
   }
-  function updateRouteSearchBounds() {
+  function updateRouteSearchVisibility() {
     if(screenName!=="Routes" || !bridge) return;
     const search=document.getElementById("route-search-panel");
-    const canvas=document.querySelector(".wrap > div");
-    if(!search || !canvas) return;
-    const scale=canvas.getBoundingClientRect().width/390 || 1;
-    const bottom=(search.getBoundingClientRect().bottom-canvas.getBoundingClientRect().top)/scale;
-    bridge.setRouteSearchBounds(search.style.display!=="none",bottom);
+    if(search) bridge.setRouteSearchVisible(search.style.display!=="none");
   }
   function setRoutePreference(button,enabled) {
     button.setAttribute("aria-pressed",String(enabled));
@@ -331,20 +333,21 @@
     return Object.fromEntries([...document.querySelectorAll("[data-route-preference]")].map(button=>[button.dataset.routePreference,button.getAttribute("aria-pressed")==="true"]));
   }
   window.walkItRouteLoading=function() {
-    document.getElementById("route-search-panel")?.style.setProperty("display","none");
-    updateRouteSearchBounds();
-    document.getElementById("route-panel-toggles")?.style.setProperty("display","flex");
+    const findButton=document.getElementById("route-find-button");
+    if(findButton) findButton.disabled=true;
+    const message=document.getElementById("route-search-message");
+    if(message) { message.textContent="Finding a walking route…"; message.style.display="block"; }
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.setAttribute("aria-expanded","false");
-    bridge.setRouteResultsVisible(true);
+    bridge.setRouteResultsVisible(false);
   };
   function toggleRoutePanel(which) {
     const search=document.getElementById("route-search-panel");
     if(!search) return;
     const show=search.style.display==="none";
     search.style.display=show?"":"none";
-    updateRouteSearchBounds();
+    updateRouteSearchVisibility();
     const reports=document.getElementById("route-reports-toggle");
     if(reports) { reports.style.display=show?"none":document.getElementById("route-report-rail")?.dataset.hasRoute==="true"?"block":"none"; reports.setAttribute("aria-expanded","false"); }
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
@@ -752,7 +755,10 @@
         return;
       }
       window.walkItRouteLoading();
-      if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim(),JSON.stringify(routePreferences()));
+      try {
+        if (bridge) bridge.planRoute(origin.value.trim(),destination.value.trim(),JSON.stringify(routePreferences()));
+        else window.walkItRouteError("Route planning is unavailable. Reopen the route screen and try again.");
+      } catch (_) { window.walkItRouteError("Could not start route planning. Reopen the route screen and try again."); }
       return;
     }
     if (lower === "find detour") { if (bridge) bridge.planDetour(); return; }
@@ -825,10 +831,22 @@
     if(view) view.textContent=message;
     document.querySelectorAll("#login-submit,#signup-submit").forEach(button=>button.disabled=false);
   };
-  window.walkItRouteReady = function() {};
+  window.walkItRouteReady = function() {
+    const findButton=document.getElementById("route-find-button");
+    if(findButton) findButton.disabled=false;
+    document.getElementById("route-search-message")?.style.setProperty("display","none");
+    document.getElementById("route-search-panel")?.style.setProperty("display","none");
+    updateRouteSearchVisibility();
+    document.getElementById("route-panel-toggles")?.style.setProperty("display","flex");
+    bridge.setRouteResultsVisible(true);
+  };
   window.walkItRouteError = function(message) {
+    const findButton=document.getElementById("route-find-button");
+    if(findButton) findButton.disabled=false;
+    const error=document.getElementById("route-search-message");
+    if(error) { error.textContent=message; error.style.display="block"; }
     document.getElementById("route-search-panel")?.style.setProperty("display","");
-    updateRouteSearchBounds();
+    updateRouteSearchVisibility();
     document.getElementById("route-panel-toggles")?.style.setProperty("display","none");
     document.getElementById("route-reports-toggle")?.style.setProperty("display","none");
     document.getElementById("route-report-rail")?.style.setProperty("display","none");
